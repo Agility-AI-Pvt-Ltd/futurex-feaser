@@ -31,6 +31,7 @@ An agentic, multi-step feasibility analysis system that researches your startup 
 | **Smart Multi-Query Search** | LLM generates 3 targeted queries (competitors, market, YC-funded) instead of one broad query |
 | **Reddit Intelligence** | Dedicated Reddit search lane captures real community opinions and pain points |
 | **Content Quality Filtering** | Strips nav/header boilerplate; skips login walls, CAPTCHAs, and timeout pages |
+| **Optional Semantic Noise Remover** | Can semantically drop low-relevance scraped chunks using `sentence-transformers`, controlled from `.env` |
 | **URL Deduplication** | All URLs from all queries are deduplicated before crawling |
 | **Structured JSON Report** | 7-field feasibility report: score, idea fit, competitors, opportunity, targeting, next step, reasoning chain |
 | **Local RAG Engine** | Scraped data + report embedded via MiniLM-L6-v2 into a local Qdrant vector store with lazy client initialization |
@@ -64,6 +65,8 @@ load_context_node          → history pre-fetched in routes.py; node is a no-op
         crawler_service (async, per URL):
           ├── extract_core()       → first 30 meaningful lines, cap 1500 chars
           └── is_useful_content()  → rejects login walls, timeouts, CAPTCHAs
+              │
+              └── optional noise remover → semantic keep/drop filter using idea/query seed texts
               │
               ▼
       llm_agent_node
@@ -164,9 +167,15 @@ fesebility_check/
 │   ├── rag/
 │   │   ├── embedder.py        # SentenceTransformers chunking, lazy Qdrant init, clean shutdown
 │   │   └── retriever.py       # Chunk count check + Qdrant retrieval compatibility wrapper
+│   ├── noiseremover/
+│   │   ├── __init__.py
+│   │   └── chunk_filter.py    # Semantic chunk scorer / filter using sentence-transformers
 │   ├── scraper/
 │   │   └── web.py             # ddgs_url_scrapper, extract_core,
-│   │                          # filter_urls, is_useful_content, crawler_service
+│   │                          # filter_urls, is_useful_content, crawler_service,
+│   │                          # dedicated noise remover logger
+│   ├── log/
+│   │   └── noise_remover.log  # Separate keep/drop logs for semantic filtering
 │   ├── qdrant_data/           # Local Qdrant persistence (gitignored in prod)
 │   ├── sandbox/
 │   │   └── test_qa_rag.py     # QA RAG diagnostic harness for retrieval/full-graph checks
@@ -234,6 +243,9 @@ Create `backend/.env`:
 ```env
 OPENAI_API_KEY=your_openai_key_here        # or GROQ_API_KEY if using Groq
 POSTGRES_URL=postgresql://user:password@host/dbname?sslmode=require
+NOISE_REMOVER_ENABLED=false
+NOISE_REMOVER_THRESHOLD=0.4
+NOISE_REMOVER_MODEL=all-MiniLM-L6-v2
 ```
 
 ### 2. Backend Setup
@@ -245,6 +257,11 @@ source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python main.py
 ```
+
+If you enable the noise remover, make sure you start the app with the same
+virtual environment where `requirements.txt` was installed. Running the app
+with system `python3` can cause `sentence_transformers` import errors even if
+it is installed inside `.venv`.
 
 Backend runs at → **http://localhost:8000**
 
@@ -265,6 +282,19 @@ EMBEDDING_LOCAL_FILES_ONLY=false
 
 - `PRELOAD_RAG_ON_STARTUP=false` keeps Qdrant lazy-loaded and avoids startup lock contention.
 - `EMBEDDING_LOCAL_FILES_ONLY=true` is useful in offline environments if the MiniLM model is already cached locally.
+
+### 2.2 Optional Noise Remover Flags
+
+```env
+NOISE_REMOVER_ENABLED=false
+NOISE_REMOVER_THRESHOLD=0.4
+NOISE_REMOVER_MODEL=all-MiniLM-L6-v2
+```
+
+- `NOISE_REMOVER_ENABLED=true` turns on semantic filtering after crawl + `extract_core()`.
+- `NOISE_REMOVER_THRESHOLD` controls how aggressively chunks are dropped.
+- `NOISE_REMOVER_MODEL` lets you switch the sentence-transformer model if needed.
+- Noise-remover decisions are written to `log/noise_remover.log`, separate from `scraper.log`.
 
 ### 3. Frontend Setup
 
@@ -340,7 +370,29 @@ Step 3 — Report Dashboard
 | `filter_urls(urls, max=6)` | Removes `reddit.com`, `quora.com`, `zhihu.com`; caps list |
 | `extract_core(markdown)` | Keeps first 30 lines > 40 chars; hard cap 1500 chars |
 | `is_useful_content(text)` | Rejects pages with login walls, CAPTCHAs, timeouts |
-| `crawler_service(urls)` | Async crawl of all URLs; applies `extract_core` + quality check |
+| `crawler_service(urls, seed_texts=None)` | Async crawl of all URLs; applies `extract_core`, quality checks, and optional semantic noise removal |
+
+### Noise Remover Logging
+
+When `NOISE_REMOVER_ENABLED=true`, semantic filter decisions are logged to:
+
+```text
+log/noise_remover.log
+```
+
+Each chunk decision includes:
+- similarity score
+- source URL
+- source title
+- kept/dropped status
+- chunk preview
+
+Example log lines:
+
+```text
+[NOISE_REMOVER][KEEP] score=0.6123 | url=... | title=... | chunk=...
+[NOISE_REMOVER][DROP] score=0.1842 | url=... | title=... | chunk=...
+```
 
 ---
 
