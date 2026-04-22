@@ -396,6 +396,43 @@ Example log lines:
 
 ---
 
+## 🔀 Git Remotes
+
+Use GitHub as the primary `origin` remote and add Hugging Face as a second remote:
+
+```bash
+# Keep GitHub as origin
+git remote set-url origin https://github.com/Agility-AI-Pvt-Ltd/futurex-feaser.git
+
+# Add Hugging Face as another remote
+git remote add hf https://huggingface.co/spaces/krrishbabu/futurex-aii
+
+# Check both remotes
+git remote -v
+```
+
+Expected output:
+
+```text
+origin  https://github.com/Agility-AI-Pvt-Ltd/futurex-feaser.git
+hf      https://huggingface.co/spaces/krrishbabu/futurex-aii
+```
+
+Whenever you make changes:
+
+```bash
+git add .
+git commit -m "Updated feature"
+
+# Push to GitHub
+git push origin main
+
+# Push to Hugging Face
+git push hf main
+```
+
+---
+
 ## 📝 License
 
 MIT
