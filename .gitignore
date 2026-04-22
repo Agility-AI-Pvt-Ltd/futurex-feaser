@@ -1,0 +1,29 @@
+# Environments
+backend/.env
+.env
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+backend/venv/
+backend/__pycache__/
+
+# Database
+backend/feasibility.db
+feasibility.db
+
+# Build
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+.venv
+.env
+
+.env
+qdrant_data/
+backend/qdrant_data/
+*.sqlite
+scraper.log
