@@ -31,7 +31,7 @@ async def lifespan(_app):
         try:
             from rag.embedder import _init_qdrant
             _init_qdrant()
-            print("✅ MiniLM-L6-v2 Embedder & Qdrant initialized locally!")
+            print("✅ BAAI/bge-small-en-v1.5 embedder & Qdrant initialized locally!")
         except ImportError as e:
             print(f"⚠️  RAG packages missing: {e}")
         except Exception as e:

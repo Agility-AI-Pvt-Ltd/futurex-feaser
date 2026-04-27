@@ -34,7 +34,7 @@ An agentic, multi-step feasibility analysis system that researches your startup 
 | **Optional Semantic Noise Remover** | Can semantically drop low-relevance scraped chunks using `sentence-transformers`, controlled from `.env` |
 | **URL Deduplication** | All URLs from all queries are deduplicated before crawling |
 | **Structured JSON Report** | 7-field feasibility report: score, idea fit, competitors, opportunity, targeting, next step, reasoning chain |
-| **Local RAG Engine** | Scraped data + report embedded via MiniLM-L6-v2 into a local Qdrant vector store with lazy client initialization |
+| **Local RAG Engine** | Scraped data + report embedded via `BAAI/bge-small-en-v1.5` into a local Qdrant vector store with lazy client initialization |
 | **Post-Report QA Chat** | Chat interactively with your report using the RAG Q&A pipeline |
 | **QA Sliding-Window Memory** | Last 7 Q&A turns kept verbatim; older turns auto-compressed into a rolling LLM summary |
 | **Parallel Background Embedding** | Search results are embedded in a background thread while the LLM analyses concurrently |
@@ -70,7 +70,7 @@ load_context_node          → history pre-fetched in routes.py; node is a no-op
               │
               ▼
       llm_agent_node
-        ├── (Background Thread) search_results → MiniLM-L6-v2 → Qdrant  ← parallel embed
+        ├── (Background Thread) search_results → BAAI/bge-small-en-v1.5 → Qdrant  ← parallel embed
         └── feasibility prompt (general + Reddit context-aware) → LLM → JSON report
               │
               ▼
@@ -133,7 +133,7 @@ routes.py: append new {q, a} turn to full DB list; save updated summary → db.c
 | **Web Search** | DDGS (`ddgs` package) |
 | **Web Crawler** | crawl4ai (async, headless) |
 | **Vector Database** | Qdrant local disk collection `feasibility_context` with lazy initialization |
-| **Embeddings** | SentenceTransformers `all-MiniLM-L6-v2` |
+| **Embeddings** | FastEmbed + SentenceTransformers with `BAAI/bge-small-en-v1.5` |
 | **Backend API** | FastAPI + Uvicorn |
 | **Database** | PostgreSQL via Neon (SQLAlchemy ORM) |
 | **Frontend** | React + Vite |
@@ -165,7 +165,7 @@ fesebility_check/
 │   │       ├── feasibility.py     # Main 7-field JSON report prompt
 │   │       └── qa.py              # QA prompt (with memory + RAG context)
 │   ├── rag/
-│   │   ├── embedder.py        # SentenceTransformers chunking, lazy Qdrant init, clean shutdown
+│   │   ├── embedder.py        # FastEmbed-backed chunking, lazy Qdrant init, clean shutdown
 │   │   └── retriever.py       # Chunk count check + Qdrant retrieval compatibility wrapper
 │   ├── noiseremover/
 │   │   ├── __init__.py
@@ -245,7 +245,7 @@ OPENAI_API_KEY=your_openai_key_here        # or GROQ_API_KEY if using Groq
 POSTGRES_URL=postgresql://user:password@host/dbname?sslmode=require
 NOISE_REMOVER_ENABLED=false
 NOISE_REMOVER_THRESHOLD=0.4
-NOISE_REMOVER_MODEL=all-MiniLM-L6-v2
+NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
 ```
 
 ### 2. Backend Setup
@@ -276,19 +276,19 @@ Backend runs at → **http://localhost:8000**
 
 ```env
 PRELOAD_RAG_ON_STARTUP=false
-EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
 EMBEDDING_LOCAL_FILES_ONLY=false
 ```
 
 - `PRELOAD_RAG_ON_STARTUP=false` keeps Qdrant lazy-loaded and avoids startup lock contention.
-- `EMBEDDING_LOCAL_FILES_ONLY=true` is useful in offline environments if the MiniLM model is already cached locally.
+- `EMBEDDING_LOCAL_FILES_ONLY=true` is useful in offline environments if the BGE model is already cached locally.
 
 ### 2.2 Optional Noise Remover Flags
 
 ```env
 NOISE_REMOVER_ENABLED=false
 NOISE_REMOVER_THRESHOLD=0.4
-NOISE_REMOVER_MODEL=all-MiniLM-L6-v2
+NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
 ```
 
 - `NOISE_REMOVER_ENABLED=true` turns on semantic filtering after crawl + `extract_core()`.
@@ -399,4 +399,3 @@ Example log lines:
 ## 📝 License
 
 MIT
->>>>>>> b600e93 (v11)
