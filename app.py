@@ -1,15 +1,66 @@
+import os
 import sys
+import threading
 import traceback
+from contextlib import asynccontextmanager
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from api.routes import router
+from core.config import settings
+from core.database import init_db
+
+
+def _initialize_database():
+    print("Starting up... initializing database")
+    try:
+        from core.database import engine
+
+        with engine.connect() as connection:
+            print("Successfully connected to the PostgreSQL database!")
+        init_db()
+        print("Database tables verified/initialized!")
+    except Exception as e:
+        print("ERROR: Failed to connect to or initialize the database. Please check your POSTGRES_URL.")
+        print(f"Details: {e}")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    threading.Thread(target=_initialize_database, daemon=True).start()
+
+    preload_rag = os.getenv("PRELOAD_RAG_ON_STARTUP", "").lower() in {"1", "true", "yes"}
+    if preload_rag:
+        print("Starting up RAG embedding models...")
+        try:
+            from rag.embedder import _init_qdrant
+
+            _init_qdrant()
+            print("BAAI/bge-small-en-v1.5 embedder and Qdrant initialized locally.")
+        except ImportError as e:
+            print(f"RAG packages missing: {e}")
+        except Exception as e:
+            print(f"Qdrant initialization error: {e}")
+    else:
+        print("Skipping eager RAG startup; Qdrant will initialize lazily on first RAG request.")
+
+    yield
+
+    try:
+        from rag.embedder import close_qdrant
+
+        close_qdrant()
+    except Exception:
+        pass
+    print("Shutting down...")
 
 app = FastAPI(
     title="Feasibility Check - AI Analysis System",
     description="AI-powered startup feasibility analysis using LangGraph & OpenAI",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -39,3 +90,22 @@ app.include_router(router, prefix="/api")
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Feasibility Check API is running"}
+
+
+def run() -> None:
+    port = int(os.getenv("PORT") or os.getenv("APP_PORT") or str(settings.APP_PORT))
+    host = os.getenv("APP_HOST", settings.APP_HOST)
+    reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes"}
+
+    print(f"Binding FastAPI server on {host}:{port}")
+    uvicorn.run(
+        "app:app",
+        host=host,
+        port=port,
+        reload=reload_enabled,
+        log_level="info",
+    )
+
+
+if __name__ == "__main__":
+    run()
