@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # ── Reddit ─────────────────────────────────────────────────────────────────
     REDDIT_CLIENT_ID: str = Field(default="")
     REDDIT_CLIENT_SECRET: str = Field(default="")
+    REDDIT_USER_AGENT: str = Field(default="futurex-feaser/1.0")
 
     # ── OpenAI ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = Field(default="")

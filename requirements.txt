@@ -18,6 +18,7 @@ beautifulsoup4
 ddgs
 crawl4ai
 numpy
+praw
 qdrant-client
 fastembed
 sentence-transformers

@@ -394,6 +394,7 @@ The backend:
 - initializes database tables on startup
 - uses lazy Qdrant startup by default
 - loads the local vector database only when RAG is first needed
+- lazy-loads crawl/search dependencies so the FastAPI server can bind its port before research tools are used
 
 Useful environment flags:
 

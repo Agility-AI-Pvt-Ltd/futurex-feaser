@@ -10,7 +10,7 @@ pinned: false
 
 # 🚀 Feasibility Check — AI-Powered Startup Idea Analyser
 
-An agentic, multi-step feasibility analysis system that researches your startup idea live on the web, gathers community sentiment from Reddit, and produces a structured JSON report — all powered by a **LangGraph stateful pipeline**, **Groq / OpenAI LLM**, **crawl4ai**, and a **local Qdrant RAG engine**.
+An agentic, multi-step feasibility analysis system that researches your startup idea live on the web, gathers community sentiment from Reddit, and produces a structured JSON report — all powered by a **LangGraph stateful pipeline**, **Groq / OpenAI LLM**, **crawl4ai**, **PRAW**, and a **local Qdrant RAG engine**.
 
 ![Backend](https://img.shields.io/badge/Backend-FastAPI-009688)
 ![Pipeline](https://img.shields.io/badge/Pipeline-LangGraph-blueviolet)
@@ -18,7 +18,7 @@ An agentic, multi-step feasibility analysis system that researches your startup 
 ![DB](https://img.shields.io/badge/Database-PostgreSQL%20%2F%20Neon-4169E1)
 ![Vector](https://img.shields.io/badge/VectorDB-Qdrant%20(local)-red)
 ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61DAFB)
-![Search](https://img.shields.io/badge/Search-DDGS%20%2B%20crawl4ai-orange)
+![Search](https://img.shields.io/badge/Search-DDGS%20%2B%20PRAW%20%2B%20crawl4ai-orange)
 
 ---
 
@@ -29,7 +29,7 @@ An agentic, multi-step feasibility analysis system that researches your startup 
 | **Stateful Conversations** | Persistent multi-turn chat via PostgreSQL — resume any idea analysis across sessions |
 | **LangGraph Pipeline** | Modular, graph-based agent with conditional routing (clarify → research → analyse) |
 | **Smart Multi-Query Search** | LLM generates 3 targeted queries (competitors, market, YC-funded) instead of one broad query |
-| **Reddit Intelligence** | Dedicated Reddit search lane captures real community opinions and pain points |
+| **Reddit Intelligence** | Dedicated Reddit API lane uses PRAW with your credentials to capture real community opinions and pain points |
 | **Content Quality Filtering** | Strips nav/header boilerplate; skips login walls, CAPTCHAs, and timeout pages |
 | **Optional Semantic Noise Remover** | Can semantically drop low-relevance scraped chunks using `sentence-transformers`, controlled from `.env` |
 | **URL Deduplication** | All URLs from all queries are deduplicated before crawling |
@@ -60,9 +60,9 @@ load_context_node          → history pre-fetched in routes.py; node is a no-op
         ├── Query 1: "{idea} startup competitors"      → filter_urls (max 6)
         ├── Query 2: "{idea} existing products market" → filter_urls (max 6)
         ├── Query 3: "{idea} Y Combinator funded"      → filter_urls (max 6)
-        └── Reddit:  "{q1} site:reddit.com"            → unfiltered (keep reddit URLs)
+        └── Reddit API: "{q1}"                         → PRAW search + top comments
               │
-        crawler_service (async, per URL):
+        crawler_service (async, per URL, non-Reddit only):
           ├── extract_core()       → first 30 meaningful lines, cap 1500 chars
           └── is_useful_content()  → rejects login walls, timeouts, CAPTCHAs
               │
@@ -130,7 +130,7 @@ routes.py: append new {q, a} turn to full DB list; save updated summary → db.c
 |---|---|
 | **LLM** | Groq (primary) / OpenAI GPT-4o-mini (fallback) |
 | **Agent Orchestration** | LangGraph (StateGraph) |
-| **Web Search** | DDGS (`ddgs` package) |
+| **Web Search** | DDGS (`ddgs` package) + Reddit API via PRAW |
 | **Web Crawler** | crawl4ai (async, headless) |
 | **Vector Database** | Qdrant local disk collection `feasibility_context` with lazy initialization |
 | **Embeddings** | FastEmbed + SentenceTransformers with `BAAI/bge-small-en-v1.5` |
@@ -243,6 +243,9 @@ Create `backend/.env`:
 ```env
 OPENAI_API_KEY=your_openai_key_here        # or GROQ_API_KEY if using Groq
 POSTGRES_URL=postgresql://user:password@host/dbname?sslmode=require
+REDDIT_CLIENT_ID=your-reddit-client-id
+REDDIT_CLIENT_SECRET=your-reddit-client-secret
+REDDIT_USER_AGENT=futurex-feaser/1.0
 NOISE_REMOVER_ENABLED=false
 NOISE_REMOVER_THRESHOLD=0.4
 NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
@@ -272,6 +275,7 @@ python app.py
 ```
 
 Render injects its own `PORT` environment variable automatically, and the app now binds to `0.0.0.0:$PORT`.
+Heavy search/crawl dependencies are loaded lazily, so the API can still boot on Render before the first research request.
 
 > On first startup, `main.py` auto-creates all DB tables (including the new
 > `qa_history` and `qa_summary` columns added to `agent_states`).

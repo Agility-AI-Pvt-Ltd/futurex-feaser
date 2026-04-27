@@ -10,7 +10,13 @@ import json
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
 from pipeline.prompts.cross_question import get_cross_question_prompt
-from scraper.web import ddgs_url_scrapper, crawler_service, filter_urls
+from scraper.web import (
+    crawler_service,
+    ddgs_url_scrapper,
+    filter_urls,
+    prepare_content_results,
+    reddit_search,
+)
 
 
 from core.database import SessionLocal
@@ -102,10 +108,10 @@ def modify_query_node(state: AgentState) -> dict:
 async def web_research_node(state: AgentState) -> dict:
     """
     Tool: Web Research
-    Runs multiple targeted DDGS searches + a Reddit search.
+    Runs multiple targeted DDGS searches + a Reddit API search.
     - Up to 3 targeted queries (from modify_query_node) × 10 results each
-    - 1 Reddit query on the primary query × 10 results
-    All results are deduplicated by URL before crawling.
+    - 1 Reddit API query on the primary query
+    General web results are deduplicated by URL before crawling.
     """
     print("--- NODE EXECUTING: web_research_node ---")
     idea = state['idea']
@@ -132,11 +138,6 @@ async def web_research_node(state: AgentState) -> dict:
         raw = ddgs_url_scrapper(q)
         _add_urls(filter_urls(raw, max_results=6))  # strips reddit/quora/zhihu, caps at 6
 
-    # Reddit-specific search — intentionally unfiltered (we WANT reddit.com URLs here)
-    reddit_query = f"{queries[0]} site:reddit.com"
-    print(f"  [Search] Reddit query: {reddit_query}")
-    _add_urls(ddgs_url_scrapper(reddit_query))
-
     print(f"  [Search] Total unique URLs to crawl: {len(all_urls)}")
 
     if not all_urls:
@@ -151,8 +152,21 @@ async def web_research_node(state: AgentState) -> dict:
         f"{problem_solved} existing solutions",
     ]
 
-    results_text = await crawler_service(all_urls, seed_texts=seed_texts)
-    return {"search_results": results_text}
+    web_results_text = await crawler_service(all_urls, seed_texts=seed_texts) if all_urls else ""
+
+    reddit_query = queries[0]
+    print(f"  [Search] Reddit API query: {reddit_query}")
+    reddit_items = reddit_search(reddit_query)
+    reddit_results_text = prepare_content_results(reddit_items, seed_texts=seed_texts) if reddit_items else ""
+
+    combined_results = "\n\n---\n\n".join(
+        part for part in [web_results_text, reddit_results_text] if part and part.strip()
+    )
+
+    if not combined_results:
+        return {"search_results": "No relevant data found on the web or Reddit."}
+
+    return {"search_results": combined_results}
 
 
 def llm_agent_node(state: AgentState) -> dict:

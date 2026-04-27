@@ -3,8 +3,6 @@ import logging
 import os
 import re
 import sys
-from ddgs import DDGS
-from crawl4ai import AsyncWebCrawler
 from core.config import settings
 
 
@@ -32,6 +30,8 @@ if not noise_remover_logger.handlers:
 
 
 def ddgs_url_scrapper(query):
+    from ddgs import DDGS
+
     logging.info(f"Searching DDGS for query: {query}")
 
     with DDGS() as ddgs:
@@ -200,8 +200,92 @@ def _apply_noise_remover(content_items: list[dict], seed_texts: list[str] | None
         return content_items
 
 
+def _format_content_items(content_items: list[dict]) -> str:
+    return "\n\n---\n\n".join(
+        f"Source: {item['title']} ({item['url']})\nContent:\n{item['content']}"
+        for item in content_items
+    )
+
+
+def reddit_search(query: str, max_results: int = 8) -> list[dict]:
+    if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
+        logging.warning("Reddit credentials are missing; skipping Reddit API search.")
+        return []
+
+    try:
+        import praw
+    except ImportError:
+        logging.warning("praw is not installed; skipping Reddit API search.")
+        return []
+
+    logging.info("Searching Reddit API for query: %s", query)
+
+    reddit = praw.Reddit(
+        client_id=settings.REDDIT_CLIENT_ID,
+        client_secret=settings.REDDIT_CLIENT_SECRET,
+        user_agent=settings.REDDIT_USER_AGENT,
+    )
+
+    items: list[dict] = []
+    try:
+        submissions = reddit.subreddit("all").search(
+            query,
+            sort="relevance",
+            time_filter="year",
+            limit=max_results,
+        )
+
+        for submission in submissions:
+            parts = [
+                f"Subreddit: r/{submission.subreddit.display_name}",
+                f"Title: {submission.title.strip()}",
+            ]
+
+            body = (submission.selftext or "").strip()
+            if body:
+                parts.append(f"Post: {body[:1200]}")
+
+            top_comments = []
+            try:
+                submission.comment_sort = "top"
+                submission.comments.replace_more(limit=0)
+                for comment in submission.comments[:2]:
+                    comment_body = (getattr(comment, "body", "") or "").strip()
+                    if comment_body:
+                        top_comments.append(comment_body[:500])
+            except Exception as comment_exc:
+                logging.warning(
+                    "Failed to fetch top comments for Reddit post %s: %s",
+                    submission.permalink,
+                    comment_exc,
+                )
+
+            if top_comments:
+                parts.append("Top comments:\n- " + "\n- ".join(top_comments))
+
+            items.append(
+                {
+                    "title": f"Reddit discussion: {submission.title.strip()}",
+                    "url": f"https://www.reddit.com{submission.permalink}",
+                    "content": "\n".join(parts),
+                }
+            )
+    except Exception as exc:
+        logging.error("Reddit API search failed for query '%s': %s", query, exc, exc_info=True)
+        return []
+
+    return items
+
+
+def prepare_content_results(content_items: list[dict], seed_texts: list[str] | None = None) -> str:
+    filtered_items = _apply_noise_remover(content_items, seed_texts)
+    return _format_content_items(filtered_items)
+
+
 async def crawler_service(urls, seed_texts=None):
     content_items = []
+    from crawl4ai import AsyncWebCrawler
+
     async with AsyncWebCrawler() as crawler:
         for item in urls:
             title = item["title"]
@@ -269,13 +353,7 @@ async def crawler_service(urls, seed_texts=None):
 
             print("-" * 80)
 
-    content_items = _apply_noise_remover(content_items, seed_texts)
-
-    content_results = [
-        f"Source: {item['title']} ({item['url']})\nContent:\n{item['content']}"
-        for item in content_items
-    ]
-    return "\n\n---\n\n".join(content_results)
+    return prepare_content_results(content_items, seed_texts=seed_texts)
 
 
 if __name__ == "__main__":
@@ -288,22 +366,19 @@ if __name__ == "__main__":
             logging.info("User exited program")
             break
 
-        reddit_query = f"{query} site:reddit.com"
-
         try:
-            urls = ddgs_url_scrapper(reddit_query)
-
-            if not urls:
+            reddit_items = reddit_search(query)
+            if not reddit_items:
                 print("No results found.")
-                logging.warning(f"No results found for query: {reddit_query}")
+                logging.warning(f"No Reddit API results found for query: {query}")
                 continue
 
-            asyncio.run(crawler_service(urls))
+            print(prepare_content_results(reddit_items))
 
         except Exception as e:
             print(f"Unexpected error: {e}")
             logging.error(
-                f"Unexpected error for query '{reddit_query}': {str(e)}",
+                f"Unexpected error for query '{query}': {str(e)}",
                 exc_info=True
             )
 
