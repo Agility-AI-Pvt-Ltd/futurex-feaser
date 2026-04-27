@@ -1,3 +1,4 @@
+                                                                                                               
 fastapi
 uvicorn
 langgraph
@@ -14,10 +15,16 @@ langchain
 langchain-community
 aiofiles
 requests
+streamlit
 beautifulsoup4
 ddgs
 crawl4ai
-numpy
+numpy<2
+praw
 qdrant-client
 fastembed
-sentence-transformers
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2
+
+sentence-transformers==2.7.0

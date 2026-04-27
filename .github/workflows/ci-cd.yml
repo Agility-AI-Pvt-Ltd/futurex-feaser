@@ -1,0 +1,66 @@
+name: Backend CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile backend code
+        run: |
+          python -m compileall app.py main.py api core models noiseremover pipeline rag scraper streamlit_app.py
+
+      - name: Smoke test main entrypoint import
+        run: |
+          python -c "from main import app; print(app.title)"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            APP_DIR="/home/${{ secrets.USER }}/futurex-feaser"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone https://github.com/Agility-AI-Pvt-Ltd/futurex-feaser.git "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            git pull origin main
+
+            python3 -m venv .venv
+            . .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            pkill -f "python -u app.py" || true
+            nohup .venv/bin/python -u app.py > app.log 2>&1 &
