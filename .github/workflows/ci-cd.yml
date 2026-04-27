@@ -1,4 +1,4 @@
-name: Backend CI
+name: Backend CI/CD (Docker)
 
 on:
   push:
@@ -10,37 +10,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
+      - name: Build Docker image (test build)
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          docker build -t futurex-app .
 
-      - name: Compile backend code
+      - name: Run container (smoke test)
         run: |
-          python -m compileall app.py main.py api core models noiseremover pipeline rag scraper streamlit_app.py
+          docker run -d -p 7860:7860 --name test-container futurex-app
+          sleep 10
+          docker ps
+          docker logs test-container
 
-      - name: Smoke test main entrypoint import
+      - name: Stop test container
         run: |
-          python -c "from main import app; print(app.title)"
+          docker stop test-container
+          docker rm test-container
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
     steps:
-      - name: Deploy to EC2
+      - name: Deploy to EC2 via SSH (Docker)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
@@ -48,19 +43,36 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             set -e
+
             APP_DIR="/home/${{ secrets.USER }}/futurex-feaser"
 
+            # Clone if not exists
             if [ ! -d "$APP_DIR/.git" ]; then
               git clone https://github.com/Agility-AI-Pvt-Ltd/futurex-feaser.git "$APP_DIR"
             fi
 
             cd "$APP_DIR"
+
+            # Pull latest code
             git pull origin main
 
-            python3 -m venv .venv
-            . .venv/bin/activate
-            pip install --upgrade pip
-            pip install -r requirements.txt
+            # Stop old container if running
+            docker stop futurex || true
+            docker rm futurex || true
 
-            pkill -f "python -u app.py" || true
-            nohup .venv/bin/python -u app.py > app.log 2>&1 &
+            # Remove old image (optional cleanup)
+            docker rmi futurex-app || true
+
+            # Build new Docker image
+            docker build -t futurex-app .
+
+            # Run new container
+            docker run -d \
+              --name futurex \
+              -p 7860:7860 \
+              --restart always \
+              futurex-app
+
+            # Show running containers
+            docker ps
+
