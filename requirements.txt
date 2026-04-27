@@ -3,6 +3,7 @@ uvicorn
 langgraph
 langchain-google-genai
 langchain-openai
+langchain-text-splitters
 google-api-python-client
 sqlalchemy
 psycopg2-binary
@@ -16,6 +17,7 @@ requests
 beautifulsoup4
 ddgs
 crawl4ai
+numpy
 qdrant-client
 fastembed
 sentence-transformers

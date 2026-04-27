@@ -37,8 +37,8 @@ def _init_qdrant(load_embedder: bool = True):
         try:
             from fastembed import TextEmbedding
 
-            # fastembed is lighter than sentence-transformers and keeps our
-            # default embedding size aligned with the 384-dim Qdrant collection.
+            # BGE small is lightweight and keeps the vector size aligned with
+            # the 384-dim Qdrant collection.
             embedder = TextEmbedding(model_name=EMBEDDING_MODEL_NAME)
         except Exception as e:
             logger.error(f"Failed to initialize fastembed: {e}")
@@ -57,8 +57,9 @@ def close_qdrant():
 
 def embed_conversation_context(conversation_id: str, search_results: str, analysis: str):
     """
-    Chunks the search results and the final analysis, embeds them using MiniLM-L6-v2, 
-    and inserts them into local Qdrant collection under the given conversation_id.
+    Chunks the search results and the final analysis, embeds them using the
+    configured BGE model, and inserts them into the local Qdrant collection
+    under the given conversation_id.
     """
     try:
         _init_qdrant(load_embedder=True)

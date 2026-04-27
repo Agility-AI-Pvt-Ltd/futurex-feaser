@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # ── Noise Remover ────────────────────────────────────────────────────────
     NOISE_REMOVER_ENABLED: bool = Field(default=False)
     NOISE_REMOVER_THRESHOLD: float = Field(default=0.4)
-    NOISE_REMOVER_MODEL: str = Field(default="all-MiniLM-L6-v2")
+    NOISE_REMOVER_MODEL: str = Field(default="BAAI/bge-small-en-v1.5")
 
     # ── CORS ───────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: List[str] = Field(default=["*"])
