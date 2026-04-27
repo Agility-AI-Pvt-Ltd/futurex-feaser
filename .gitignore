@@ -27,3 +27,27 @@ qdrant_data/
 backend/qdrant_data/
 *.sqlite
 scraper.log
+
+*.pem
+
+__pycache__/
+*.pyc
+
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# Virtual env
+.venv/
+venv/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+
+# Docker (optional)
+docker-compose.override.yml
