@@ -17,7 +17,7 @@ class ChunkFilter:
     def __init__(
         self,
         threshold: float = 0.4,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = "BAAI/bge-small-en-v1.5",
     ):
         self.model = _get_sentence_transformer(model_name)
         self.threshold = threshold

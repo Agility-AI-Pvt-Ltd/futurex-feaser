@@ -399,7 +399,7 @@ Useful environment flags:
 
 ```env
 PRELOAD_RAG_ON_STARTUP=false
-EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
 EMBEDDING_LOCAL_FILES_ONLY=false
 ```
 
