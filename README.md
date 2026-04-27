@@ -265,6 +265,14 @@ it is installed inside `.venv`.
 
 Backend runs at → **http://localhost:8000**
 
+For Render, make sure your web service starts the FastAPI server itself, for example with:
+
+```bash
+python app.py
+```
+
+Render injects its own `PORT` environment variable automatically, and the app now binds to `0.0.0.0:$PORT`.
+
 > On first startup, `main.py` auto-creates all DB tables (including the new
 > `qa_history` and `qa_summary` columns added to `agent_states`).
 >
