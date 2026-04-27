@@ -8,6 +8,13 @@ from crawl4ai import AsyncWebCrawler
 from core.config import settings
 
 
+try:
+    import axiom_py
+    from axiom_py.logging import AxiomHandler
+    HAS_AXIOM = True
+except ImportError:
+    HAS_AXIOM = False
+
 # Configure logging
 logging.basicConfig(
     filename="scraper.log",
@@ -15,6 +22,17 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
+
+# Add Axiom handler if configured
+if HAS_AXIOM and settings.AXIOM_TOKEN and settings.AXIOM_DATASET:
+    try:
+        axiom_client = axiom_py.Client(settings.AXIOM_TOKEN)
+        axiom_handler = AxiomHandler(axiom_client, settings.AXIOM_DATASET)
+        # Inherit root logger level
+        axiom_handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(axiom_handler)
+    except Exception as e:
+        logging.error(f"Failed to initialize Axiom logger: {e}")
 
 LOG_DIR = "log"
 NOISE_REMOVER_LOG_PATH = os.path.join(LOG_DIR, "noise_remover.log")

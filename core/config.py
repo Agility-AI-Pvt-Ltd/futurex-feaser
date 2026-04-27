@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     APP_PORT: int = Field(default=8888)
 
     # ── Database ───────────────────────────────────────────────────────────────
-    POSTGRES_URL: str = Field(default="postgresql://neondb_owner:npg_PC1qtQLI3DUB@ep-quiet-breeze-anavmbd1-pooler.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
+    POSTGRES_URL: str = Field(default="")
 
     # ── Google Search ──────────────────────────────────────────────────────────
     GOOGLE_API_KEY: str = Field(default="")
@@ -37,6 +37,10 @@ class Settings(BaseSettings):
 
     # ── CORS ───────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: List[str] = Field(default=["*"])
+
+    # ── Axiom Logging ────────────────────────────────────────────────────────
+    AXIOM_TOKEN: str = Field(default="")
+    AXIOM_DATASET: str = Field(default="")
 
 
 # Single shared instance — import this everywhere
