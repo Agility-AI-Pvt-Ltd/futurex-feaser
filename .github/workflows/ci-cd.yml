@@ -54,7 +54,8 @@ jobs:
             cd "$APP_DIR"
 
             # Pull latest code
-            git pull origin main
+            git fetch origin
+            git reset --hard origin/main
 
             # Stop old container if running
             docker stop futurex || true
