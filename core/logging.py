@@ -55,6 +55,11 @@ def configure_logging() -> logging.Logger:
     return logging.getLogger(APP_LOGGER_NAME)
 
 
+def get_logger(name: str) -> logging.Logger:
+    configure_logging()
+    return logging.getLogger(name)
+
+
 def log_event(logger: logging.Logger, message: str, **fields: Any) -> None:
     logger.info(message, extra={"event": message, **fields})
 
@@ -96,6 +101,12 @@ def safe_serialize(value: Any, max_length: int = 5000) -> Any:
         return _truncate(json.dumps(value, default=str), max_length)
     except Exception:
         return _truncate(repr(value), max_length)
+
+
+def truncate_for_log(value: Any, max_chars: int) -> str:
+    text = "" if value is None else str(value)
+    text = " ".join(text.split())
+    return _truncate(text, max_chars)
 
 
 def serialize_http_body(body: bytes, content_type: str | None, max_length: int = 10000) -> str | None:
