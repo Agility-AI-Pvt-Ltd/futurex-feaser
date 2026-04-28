@@ -4,6 +4,10 @@ from models.conversation import (
     AgentStateModel,
     FeasibilityReport,
     AuthorDailyUsage,
+    LectureChatSession,
+    LectureMessage,
+    LectureTranscriptAsset,
+    LectureTranscriptMetadata,
 )
 
 __all__ = [
@@ -12,4 +16,8 @@ __all__ = [
     "AgentStateModel",
     "FeasibilityReport",
     "AuthorDailyUsage",
+    "LectureChatSession",
+    "LectureMessage",
+    "LectureTranscriptAsset",
+    "LectureTranscriptMetadata",
 ]

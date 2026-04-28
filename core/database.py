@@ -2,8 +2,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.config import settings
+from core.db_base import Base
 from core.logging import register_sqlalchemy_logging
-from models import Base
 
 engine = create_engine(
     settings.POSTGRES_URL, 
@@ -20,6 +20,8 @@ register_sqlalchemy_logging(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
+    import models  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
 
 def get_db():

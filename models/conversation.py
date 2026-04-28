@@ -1,8 +1,8 @@
 import datetime
-from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, Date, UniqueConstraint
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, Date, String, Text, UniqueConstraint
+from sqlalchemy.orm import relationship
 
-Base = declarative_base()
+from core.db_base import Base
 
 
 class ChatSession(Base):
@@ -80,3 +80,82 @@ class AuthorDailyUsage(Base):
         onupdate=datetime.datetime.utcnow,
         nullable=False,
     )
+
+
+class LectureChatSession(Base):
+    __tablename__ = "lecture_chat_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    is_mentor_requested = Column(Boolean, default=False)
+    memory_summary = Column(Text, default="")
+
+    messages = relationship(
+        "LectureMessage",
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+    transcripts = relationship(
+        "LectureTranscriptAsset",
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+
+class LectureMessage(Base):
+    __tablename__ = "lecture_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, ForeignKey("lecture_chat_sessions.session_id"))
+    role = Column(String)
+    content = Column(Text)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
+    session = relationship("LectureChatSession", back_populates="messages")
+
+
+class LectureTranscriptAsset(Base):
+    __tablename__ = "lecture_transcript_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, ForeignKey("lecture_chat_sessions.session_id"), index=True)
+    session_name = Column(String, nullable=False)
+    source_name = Column(String, nullable=False)
+    file_name = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)
+    bucket_name = Column(String, nullable=False)
+    object_path = Column(String, nullable=False, unique=True)
+    chunks_indexed = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    session = relationship("LectureChatSession", back_populates="transcripts")
+    metadata_entry = relationship(
+        "LectureTranscriptMetadata",
+        back_populates="transcript",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class LectureTranscriptMetadata(Base):
+    __tablename__ = "lecture_transcript_metadata"
+
+    id = Column(Integer, primary_key=True, index=True)
+    transcript_id = Column(
+        Integer,
+        ForeignKey("lecture_transcript_assets.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    course_name = Column(String, nullable=False, default="")
+    instructor_name = Column(String, nullable=False, default="")
+    session_date = Column(String, nullable=False, default="")
+    description = Column(Text, nullable=False, default="")
+    tags = Column(Text, nullable=False, default="")
+    storage_path = Column(String, nullable=False)
+    qdrant_collection_name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    transcript = relationship("LectureTranscriptAsset", back_populates="metadata_entry")

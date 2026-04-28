@@ -36,9 +36,16 @@ def _initialize_database():
         print(f"Details: {e}")
 
 
-@asynccontextmanager
-async def lifespan(_app):
-    threading.Thread(target=_initialize_database, daemon=True).start()
+def _preload_runtime_models() -> None:
+    if settings.NOISE_REMOVER_ENABLED:
+        print(f"Preloading noise-remover model: {settings.NOISE_REMOVER_MODEL}")
+        try:
+            from noiseremover.chunk_filter import preload_sentence_transformer_model
+
+            preload_sentence_transformer_model(settings.NOISE_REMOVER_MODEL)
+            print("Noise-remover SentenceTransformer model loaded.")
+        except Exception as e:
+            print(f"Noise-remover preload error: {e}")
 
     preload_rag = os.getenv("PRELOAD_RAG_ON_STARTUP", "").lower() in {"1", "true", "yes"}
     if preload_rag:
@@ -54,6 +61,12 @@ async def lifespan(_app):
             print(f"Qdrant initialization error: {e}")
     else:
         print("Skipping eager RAG startup; Qdrant will initialize lazily on first RAG request.")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    threading.Thread(target=_initialize_database, daemon=True).start()
+    _preload_runtime_models()
 
     yield
 
