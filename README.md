@@ -1,286 +1,423 @@
----
-title: Futurex Feaser
-emoji: 🚀
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-app_port: 7860
-pinned: false
----
+# Futurex Feaser
 
-# 🚀 Feasibility Check — AI-Powered Startup Idea Analyser
+AI-powered startup feasibility analysis backend built with FastAPI, LangGraph, PostgreSQL, live web research, optional semantic filtering, and local Qdrant-backed retrieval for post-report Q&A.
 
-An agentic, multi-step feasibility analysis system that researches your startup idea live on the web, gathers community sentiment from Reddit, and produces a structured JSON report — all powered by a **LangGraph stateful pipeline**, **Groq / OpenAI LLM**, **crawl4ai**, and a **local Qdrant RAG engine**.
+## Overview
 
-![Backend](https://img.shields.io/badge/Backend-FastAPI-009688)
-![Pipeline](https://img.shields.io/badge/Pipeline-LangGraph-blueviolet)
-![LLM](https://img.shields.io/badge/LLM-Groq%20%2F%20GPT--4o--mini-412991)
-![DB](https://img.shields.io/badge/Database-PostgreSQL%20%2F%20Neon-4169E1)
-![Vector](https://img.shields.io/badge/VectorDB-Qdrant%20(local)-red)
-![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61DAFB)
-![Search](https://img.shields.io/badge/Search-DDGS%20%2B%20crawl4ai-orange)
+This service runs a stateful two-phase startup analysis workflow:
 
----
+1. A first `POST /api/chat` call collects the idea and returns one clarifying question.
+2. A second `POST /api/chat` call uses the same `conversation_id`, performs live research, generates a feasibility report, persists it, and prepares retrieval context for later Q&A.
+3. `POST /api/qa` lets the user ask follow-up questions grounded in the saved report and scraped context.
 
-## ✨ Features
+The backend stores long-lived state in PostgreSQL and retrieval chunks in a local Qdrant collection under `qdrant_data/`.
 
-| Feature | Description |
-|---|---|
-| **Stateful Conversations** | Persistent multi-turn chat via PostgreSQL — resume any idea analysis across sessions |
-| **LangGraph Pipeline** | Modular, graph-based agent with conditional routing (clarify → research → analyse) |
-| **Smart Multi-Query Search** | LLM generates 3 targeted queries (competitors, market, YC-funded) instead of one broad query |
-| **Reddit Intelligence** | Dedicated Reddit search lane captures real community opinions and pain points |
-| **Content Quality Filtering** | Strips nav/header boilerplate; skips login walls, CAPTCHAs, and timeout pages |
-| **Optional Semantic Noise Remover** | Can semantically drop low-relevance scraped chunks using `sentence-transformers`, controlled from `.env` |
-| **URL Deduplication** | All URLs from all queries are deduplicated before crawling |
-| **Structured JSON Report** | 7-field feasibility report: score, idea fit, competitors, opportunity, targeting, next step, reasoning chain |
-| **Local RAG Engine** | Scraped data + report embedded via `BAAI/bge-small-en-v1.5` into a local Qdrant vector store with lazy client initialization |
-| **Post-Report QA Chat** | Chat interactively with your report using the RAG Q&A pipeline |
-| **QA Sliding-Window Memory** | Last 7 Q&A turns kept verbatim; older turns auto-compressed into a rolling LLM summary |
-| **Parallel Background Embedding** | Search results are embedded in a background thread while the LLM analyses concurrently |
-| **Safer QA Retrieval** | QA checks persisted chunk availability for the active `conversation_id` before falling back to DB-backed context |
-| **Premium Glassmorphic UI** | Dark-mode React app with a 3-step conversational state machine |
+## Current Capabilities
 
----
+- Stateful conversation flow backed by PostgreSQL
+- LangGraph-based orchestration for both analysis and QA
+- LLM-generated targeted search queries
+- DuckDuckGo search plus a dedicated Reddit search lane
+- Web crawling and content extraction with `crawl4ai`
+- Junk-page filtering and URL deduplication
+- Optional semantic chunk filtering with `sentence-transformers`
+- Structured feasibility report persisted both raw and parsed
+- Local Qdrant retrieval for follow-up Q&A
+- Sliding-window QA memory with rolling summary compression
+- HTTP request/response and SQL query logging
+- Optional Axiom log export
+- Postgres-backed per-author daily scrape quota
 
-## 🧠 Main Pipeline — `POST /api/chat`
+## Runtime Flow
 
-```
-POST /api/chat
-     │
-     ▼
-load_context_node          → history pre-fetched in routes.py; node is a no-op pass-through
-     │
-     ▼ (router: is_new_chat?)
-  YES → cross_question_node    → asks 1 critical clarifying question → END (200 OK)
-  NO  → modify_query_node      → LLM generates 3 targeted JSON search queries
-              │
-              ▼
-      web_research_node
-        ├── Query 1: "{idea} startup competitors"      → filter_urls (max 6)
-        ├── Query 2: "{idea} existing products market" → filter_urls (max 6)
-        ├── Query 3: "{idea} Y Combinator funded"      → filter_urls (max 6)
-        └── Reddit:  "{q1} site:reddit.com"            → unfiltered (keep reddit URLs)
-              │
-        crawler_service (async, per URL):
-          ├── extract_core()       → first 30 meaningful lines, cap 1500 chars
-          └── is_useful_content()  → rejects login walls, timeouts, CAPTCHAs
-              │
-              └── optional noise remover → semantic keep/drop filter using idea/query seed texts
-              │
-              ▼
-      llm_agent_node
-        ├── (Background Thread) search_results → BAAI/bge-small-en-v1.5 → Qdrant  ← parallel embed
-        └── feasibility prompt (general + Reddit context-aware) → LLM → JSON report
-              │
-              ▼
-      PostgreSQL upsert  (ChatSession + AgentStateModel + FeasibilityReport)
-      Background Task    (analysis text → Qdrant embed, if not already done inline)
-              │
-              ▼
-      → frontend renders structured report
+### First `POST /api/chat`
+
+- Request does not include `conversation_id`
+- Backend creates a new UUID conversation
+- LangGraph routes to `cross_question_node`
+- LLM returns exactly one clarifying question in `analysis`
+- Response includes the new `conversation_id`
+
+This call does not trigger scraping.
+
+### Second `POST /api/chat`
+
+- Request reuses the same `conversation_id`
+- Backend reloads prior conversation context from Postgres
+- Backend enforces the daily scrape quota for the effective author
+- LangGraph routes through:
+  - `modify_query_node`
+  - `web_research_node`
+  - `llm_agent_node`
+- Search results and final report are persisted
+- Parsed report fields are upserted into `feasibility_reports`
+- Embedding runs in the background for later QA
+
+This is the call that consumes daily scrape usage.
+
+### `POST /api/qa`
+
+- Loads saved `analysis`, `search_results`, `qa_history`, and `qa_summary`
+- Runs a dedicated QA graph
+- Rewrites the user’s question into a retrieval-friendly query
+- Retrieves chunks from Qdrant filtered by `conversation_id`
+- Falls back to persisted report text and scraped text if retrieval is empty
+- Persists the new QA turn and any updated rolling summary
+
+## LangGraph Design
+
+### Main analysis graph
+
+```text
+START
+  -> load_context
+  -> route_chat
+     -> cross_question -> END
+     -> modify_query -> web_research -> analyzer -> END
 ```
 
----
+### QA graph
 
-## 🤖 QA Pipeline — `POST /api/qa`
-
-Activated after the report is generated. Supports stateful multi-turn conversation.
-
-```
-POST /api/qa  { conversation_id, question }
-     │
-     ▼
-routes.py: load full qa_history + qa_summary from AgentStateModel (DB)
-     │
-     ▼
-[qa_load_state_node]   → logs state metadata
-     │
-     ▼
-[qa_memory_node]       ← NEW — sliding-window memory manager
-  ├── total turns ≤ 14 → clip to last 7 for prompt context (no LLM call)
-  └── total turns > 14 → LLM compresses oldest turns into rolling summary
-                          window = last 7 turns; summary updated in state
-     │
-     ▼
-[qa_modify_query_node] → rewrites follow-up question into standalone retrieval query
-     │
-     ▼
-[qa_retrieve_context_node]
-  ├── Count persisted Qdrant chunks for the current conversation_id
-  ├── If chunks exist → Qdrant vector similarity search (top 5 chunks)
-  └── Fallback: persisted analysis + search_results text if no chunks or no vector hits
-     │
-     ▼
-[qa_generate_answer_node]
-  └── Prompt includes: summary of old turns + last 7 turns verbatim + RAG context
-     │
-     ▼
-routes.py: append new {q, a} turn to full DB list; save updated summary → db.commit()
-     │
-     ▼
-→ frontend renders answer + source chunks + trace
+```text
+START
+  -> qa_load_state
+  -> qa_memory
+  -> qa_modify_query
+  -> qa_retrieve_context
+  -> qa_generate_answer
+  -> END
 ```
 
----
+## Repository Structure
 
-## 🛠️ Tech Stack
-
-| Layer | Technology |
-|---|---|
-| **LLM** | Groq (primary) / OpenAI GPT-4o-mini (fallback) |
-| **Agent Orchestration** | LangGraph (StateGraph) |
-| **Web Search** | DDGS (`ddgs` package) |
-| **Web Crawler** | crawl4ai (async, headless) |
-| **Vector Database** | Qdrant local disk collection `feasibility_context` with lazy initialization |
-| **Embeddings** | FastEmbed + SentenceTransformers with `BAAI/bge-small-en-v1.5` |
-| **Backend API** | FastAPI + Uvicorn |
-| **Database** | PostgreSQL via Neon (SQLAlchemy ORM) |
-| **Frontend** | React + Vite |
-| **Styling** | Vanilla CSS — Glassmorphic dark-mode design system |
-
----
-
-## 📂 Project Structure
-
-```
-fesebility_check/
-├── backend/
-│   ├── api/
-│   │   ├── routes.py          # POST /chat, POST /qa, GET /qa/graph
-│   │   └── dependencies.py    # DB session injection
-│   ├── core/
-│   │   ├── config.py          # Pydantic settings (env vars)
-│   │   ├── database.py        # SQLAlchemy engine + session factory
-│   │   └── llm_factory.py     # LLM factory (Groq / OpenAI)
-│   ├── models/
-│   │   └── conversation.py    # ChatSession, AgentStateModel, FeasibilityReport
-│   ├── pipeline/
-│   │   ├── graph.py           # Main LangGraph StateGraph (/chat flow)
-│   │   ├── qa_graph.py        # QA LangGraph (5 nodes incl. qa_memory_node)
-│   │   ├── state.py           # Shared AgentState TypedDict
-│   │   ├── tools.py           # All /chat node functions
-│   │   └── prompts/
-│   │       ├── cross_question.py  # Clarifying question prompt
-│   │       ├── feasibility.py     # Main 7-field JSON report prompt
-│   │       └── qa.py              # QA prompt (with memory + RAG context)
-│   ├── rag/
-│   │   ├── embedder.py        # FastEmbed-backed chunking, lazy Qdrant init, clean shutdown
-│   │   └── retriever.py       # Chunk count check + Qdrant retrieval compatibility wrapper
-│   ├── noiseremover/
-│   │   ├── __init__.py
-│   │   └── chunk_filter.py    # Semantic chunk scorer / filter using sentence-transformers
-│   ├── scraper/
-│   │   └── web.py             # ddgs_url_scrapper, extract_core,
-│   │                          # filter_urls, is_useful_content, crawler_service,
-│   │                          # dedicated noise remover logger
-│   ├── log/
-│   │   └── noise_remover.log  # Separate keep/drop logs for semantic filtering
-│   ├── qdrant_data/           # Local Qdrant persistence (gitignored in prod)
-│   ├── sandbox/
-│   │   └── test_qa_rag.py     # QA RAG diagnostic harness for retrieval/full-graph checks
-│   ├── app.py                 # FastAPI app + CORS + router mount
-│   ├── main.py                # Uvicorn entrypoint + DB init lifespan + lazy RAG startup
-│   └── requirements.txt
-└── frontend/
-    └── src/
-        ├── App.jsx            # 3-step state machine (initial → cross_question → report)
-        │                      # Fixed: conversation_id race condition in React state
-        ├── index.css          # Design system (glassmorphic dark mode)
-        └── main.jsx
+```text
+futurex-feaser/
+├── api/
+│   ├── __init__.py
+│   ├── dependencies.py
+│   └── routes.py
+├── core/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── database.py
+│   ├── llm_factory.py
+│   ├── logging.py
+│   ├── rate_limiter.py
+│   └── scrape_usage.py
+├── models/
+│   ├── __init__.py
+│   └── conversation.py
+├── noiseremover/
+│   ├── __init__.py
+│   └── chunk_filter.py
+├── pipeline/
+│   ├── __init__.py
+│   ├── graph.py
+│   ├── qa_graph.py
+│   ├── state.py
+│   ├── tools.py
+│   └── prompts/
+│       ├── __init__.py
+│       ├── cross_question.py
+│       ├── feasibility.py
+│       └── qa.py
+├── rag/
+│   ├── __init__.py
+│   ├── embedder.py
+│   └── retriever.py
+├── scraper/
+│   ├── __init__.py
+│   └── web.py
+├── sandbox/
+│   ├── draw_graph.py
+│   ├── langgraph_flow.png
+│   └── test_qa_rag.py
+├── log/
+│   └── noise_remover.log
+├── qdrant_data/
+├── .env.example
+├── Dockerfile
+├── DOCUMENTATION.md
+├── app.py
+├── main.py
+├── qa_summary.py
+└── requirements.txt
 ```
 
----
+## Important Files
 
-## 🗄️ Database Schema
+- [app.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/app.py): FastAPI app, lifespan, CORS, health check, HTTP logging, uvicorn entrypoint.
+- [api/routes.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/api/routes.py): API routes, DB persistence, scrape-limit enforcement, QA persistence.
+- [pipeline/tools.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/pipeline/tools.py): main graph nodes for clarifying question, query generation, research, and analysis.
+- [pipeline/qa_graph.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/pipeline/qa_graph.py): QA graph, retrieval, memory windowing, and trace generation.
+- [scraper/web.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/scraper/web.py): DDGS search, crawl pipeline, filtering, semantic noise-remover integration.
+- [rag/embedder.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/rag/embedder.py): local Qdrant init, chunking, embedding, upsert.
+- [rag/retriever.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/rag/retriever.py): chunk-count lookup and similarity search by `conversation_id`.
+- [models/conversation.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/models/conversation.py): SQLAlchemy models.
+- [core/logging.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/core/logging.py): console logging, SQL logging, optional Axiom sink.
 
-| Table | Column | Purpose |
-|---|---|---|
-| `chat_sessions` | all | Every human/AI turn with idea, problem, customer context |
-| `agent_states` | `optimized_query` | Last LLM-generated search query string |
-| | `search_results` | Raw scraped web text |
-| | `analysis` | Final feasibility JSON string |
-| | `qa_history` | JSON list of all `{q, a}` QA turns (full, uncompressed) |
-| | `qa_summary` | LLM rolling summary of turns older than the 7-turn window |
-| `feasibility_reports` | all | Parsed structured fields: score, idea_fit, competitors, opportunity, targeting, next_step, chain_of_thought |
+## Database Schema
 
----
+### `chat_sessions`
 
-## 🔑 QA Memory Design
+Stores all human/AI turns and the main idea context.
 
+Key fields:
+- `authorId`
+- `conversation_id`
+- `idea`
+- `what_problem_it_solves`
+- `ideal_customer`
+- `human_message`
+- `ai_message`
+- `timestamp`
+
+### `agent_states`
+
+Stores the durable agent state for a conversation.
+
+Key fields:
+- `conversation_id`
+- `optimized_query`
+- `search_results`
+- `analysis`
+- `qa_history`
+- `qa_summary`
+
+### `feasibility_reports`
+
+Stores the parsed structured report fields extracted from `analysis`.
+
+Key fields:
+- `conversation_id`
+- `chain_of_thought`
+- `idea_fit`
+- `competitors`
+- `opportunity`
+- `score`
+- `targeting`
+- `next_step`
+
+### `author_daily_usage`
+
+Tracks scrape-triggering usage by author and UTC day.
+
+Key fields:
+- `author_id`
+- `usage_date`
+- `scrape_requests_count`
+
+## API Endpoints
+
+### `GET /`
+
+Health check.
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "message": "Feasibility Check API is running"
+}
 ```
-DB: qa_history = [{q, a}, {q, a}, ... N turns]   ← full history, never trimmed in DB
-DB: qa_summary = "..."                             ← rolling LLM summary of old turns
 
-Each /api/qa call:
-  1. Load full qa_history from DB → pass to graph
-  2. qa_memory_node:
-       if N <= 14 → use last 7 as context window (no LLM)
-       if N  > 14 → LLM compresses turns[:-7] → new qa_summary; window = turns[-7:]
-  3. qa_retrieve_context_node checks persisted chunk count for conversation_id
-  4. Prompt = summary (if any) + window + RAG context + question
-  5. Save: qa_history.append({q, a}); qa_summary = new_summary
+### `POST /api/chat`
+
+Request body:
+
+```json
+{
+  "idea": "AI companion for early depression screening",
+  "user_name": "Krishna",
+  "ideal_customer": "young adults and college students",
+  "problem_solved": "helps identify mental health risk early",
+  "authorId": "user_123",
+  "conversation_id": null
+}
 ```
 
-This means the prompt context is **always bounded** regardless of how long the session runs.
+Behavior:
+- first call returns a clarifying question
+- second call returns the final report JSON string in `analysis`
 
-If Qdrant has no chunks for that conversation, QA falls back to persisted
-`analysis` + `search_results` from `agent_states` so the assistant can still answer.
+Example response on first call:
 
----
-
-## 🚦 Getting Started
-
-### 1. Clone & Configure
-
-```bash
-git clone https://github.com/narayan0910/fesebility_check.git
-cd fesebility_check
+```json
+{
+  "response": "Researching your idea...",
+  "conversation_id": "46bf4e97-cd77-414d-a34f-066f677fdc71",
+  "analysis": "What specific user behavior or signal would the system use to identify someone at risk?"
+}
 ```
 
-Create `backend/.env`:
+Example response on second call:
+
+```json
+{
+  "response": "Analysis Complete",
+  "conversation_id": "46bf4e97-cd77-414d-a34f-066f677fdc71",
+  "analysis": "{\"chain_of_thought\":[...],\"idea_fit\":\"...\"}"
+}
+```
+
+### `POST /api/qa`
+
+Request body:
+
+```json
+{
+  "conversation_id": "46bf4e97-cd77-414d-a34f-066f677fdc71",
+  "question": "Which competitors are closest to this idea?"
+}
+```
+
+Example response:
+
+```json
+{
+  "answer": "The closest competitors appear to be ...",
+  "top_chunks": [
+    {
+      "source": "web_research",
+      "text": "Retrieved supporting text...",
+      "score": 0.82
+    }
+  ],
+  "trace": []
+}
+```
+
+### `GET /api/history`
+
+Query param:
+- `author_id`
+
+Returns one row per conversation for the history sidebar.
+
+### `GET /api/history/{conversation_id}`
+
+Returns saved report state and QA history for one conversation.
+
+### `GET /api/qa/graph`
+
+Returns a Mermaid graph string for the QA flow.
+
+## Scrape Quota
+
+The backend enforces a Postgres-backed quota for scrape-triggering follow-up analysis calls.
+
+- controlled by `SCRAPE_DAILY_LIMIT`
+- default is `2`
+- keyed by `authorId`
+- counted only when the request is a non-new `/api/chat` run
+- reset boundary is UTC midnight
+- overflow returns `429` with `Retry-After`
+
+Important detail:
+- for an existing conversation, the backend uses the stored conversation author, not just the incoming request body, to avoid quota bypass by changing `authorId`
+
+## Retrieval and Memory Behavior
+
+### Qdrant retrieval
+
+- chunks are stored in the `feasibility_context` collection
+- each point payload includes:
+  - `conversation_id`
+  - `source`
+  - `text`
+- retrieval is filtered by `conversation_id`
+
+### QA memory
+
+- full QA history is stored in Postgres
+- last `7` turns are kept verbatim in prompt context
+- once total QA turns exceed `14`, older turns are compressed into `qa_summary`
+- the QA route persists the updated full history after each answer
+
+### Fallback path
+
+If vector retrieval returns no chunks, the QA graph falls back to:
+- persisted `analysis`
+- persisted `search_results`
+
+## Crawling and Content Processing
+
+The crawler pipeline currently uses `ddgs` and `crawl4ai`.
+
+General behavior:
+- DDGS returns up to `10` results per query
+- general search results are filtered and capped to `6` per query
+- Reddit results are searched separately and intentionally kept
+- URLs are deduplicated before crawl
+- links are stripped from crawled markdown before extraction
+- `extract_core()` keeps the first 30 meaningful lines and caps output to 1500 chars
+- `is_useful_content()` removes short or junk pages such as login walls, CAPTCHA pages, and timeouts
+
+### Blocked or filtered domains
+
+General-query results filter out:
+- `reddit.com`
+- `quora.com`
+- `zhihu.com`
+
+Reddit still appears through the dedicated Reddit search lane.
+
+## Optional Noise Remover
+
+If `NOISE_REMOVER_ENABLED=true`, the crawler sends extracted chunks through a semantic filter:
+
+- model defaults to `BAAI/bge-small-en-v1.5`
+- threshold defaults to `0.4`
+- seed text is built from the idea, problem statement, and generated search queries
+- chunk decisions are logged to `log/noise_remover.log`
+
+The noise remover is optional. If it fails, crawling continues with unfiltered content.
+
+## Logging and Observability
+
+### HTTP logging
+
+Configured in [app.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/app.py):
+- request method, path, query, headers, and body
+- response status, duration, headers, and body
+- sensitive headers such as `authorization`, `cookie`, and `x-api-key` are redacted
+
+### SQL logging
+
+Configured in [core/logging.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/core/logging.py):
+- statement
+- parameters
+- duration
+- row count
+- query errors
+
+### File logs
+
+- `scraper.log`: crawler and search activity
+- `log/noise_remover.log`: semantic filter keep/drop decisions
+
+### Axiom
+
+If both `AXIOM_TOKEN` and `AXIOM_DATASET` are set and `axiom-py` is installed, logs are also shipped to Axiom.
+
+## Environment Variables
+
+Use `.env.example` as the starting point, then add the optional settings below as needed.
+
+### Core runtime
 
 ```env
-OPENAI_API_KEY=your_openai_key_here        # or GROQ_API_KEY if using Groq
-POSTGRES_URL=postgresql://user:password@host/dbname?sslmode=require
-NOISE_REMOVER_ENABLED=false
-NOISE_REMOVER_THRESHOLD=0.4
-NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
+APP_TITLE="Feasibility Analysis API"
+APP_HOST="0.0.0.0"
+APP_PORT=8000
+POSTGRES_URL="postgresql://user:password@hostname:5432/dbname?sslmode=require"
+OPENAI_API_KEY="sk-..."
+ALLOWED_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
+SCRAPE_DAILY_LIMIT=2
 ```
 
-### 2. Backend Setup
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
-```
-
-If you enable the noise remover, make sure you start the app with the same
-virtual environment where `requirements.txt` was installed. Running the app
-with system `python3` can cause `sentence_transformers` import errors even if
-it is installed inside `.venv`.
-
-Backend runs at → **http://localhost:8000**
-
-For Render, make sure your web service starts the FastAPI server itself, for example with:
-
-```bash
-python app.py
-```
-
-Render injects its own `PORT` environment variable automatically, and the app now binds to `0.0.0.0:$PORT`.
-
-> On first startup, `main.py` auto-creates all DB tables (including the new
-> `qa_history` and `qa_summary` columns added to `agent_states`).
->
-> RAG now initializes lazily by default. This avoids local-disk Qdrant lock
-> errors when another process already has `backend/qdrant_data` open.
-> Set `PRELOAD_RAG_ON_STARTUP=true` only if you explicitly want eager startup.
-
-### 2.1 Optional RAG Environment Flags
+### RAG and model-loading
 
 ```env
 PRELOAD_RAG_ON_STARTUP=false
@@ -288,10 +425,7 @@ EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
 EMBEDDING_LOCAL_FILES_ONLY=false
 ```
 
-- `PRELOAD_RAG_ON_STARTUP=false` keeps Qdrant lazy-loaded and avoids startup lock contention.
-- `EMBEDDING_LOCAL_FILES_ONLY=true` is useful in offline environments if the BGE model is already cached locally.
-
-### 2.2 Optional Noise Remover Flags
+### Noise remover
 
 ```env
 NOISE_REMOVER_ENABLED=false
@@ -299,111 +433,146 @@ NOISE_REMOVER_THRESHOLD=0.4
 NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
 ```
 
-- `NOISE_REMOVER_ENABLED=true` turns on semantic filtering after crawl + `extract_core()`.
-- `NOISE_REMOVER_THRESHOLD` controls how aggressively chunks are dropped.
-- `NOISE_REMOVER_MODEL` lets you switch the sentence-transformer model if needed.
-- Noise-remover decisions are written to `log/noise_remover.log`, separate from `scraper.log`.
+### Logging
 
-### 3. Frontend Setup
-
-```bash
-cd frontend
-npm install
-npm run dev
+```env
+AXIOM_TOKEN=
+AXIOM_DATASET=
 ```
 
-Frontend runs at → **http://localhost:5173** (proxies `/api` to backend)
+### Present in config but not active on the main runtime path
 
----
+These variables exist in `core/config.py` or `.env.example`, but the current main scraping flow does not depend on them:
 
-## 🧪 QA RAG Diagnostics
-
-Use the sandbox diagnostic to inspect the same retrieval path used by the QA graph:
-
-```bash
-backend/.venv/bin/python backend/sandbox/test_qa_rag.py \
-  --conversation-id <conversation_id> \
-  --question "who had exhibited symptoms of depression" \
-  --retrieval-query "who among potential users has exhibited symptoms of depression"
+```env
+GOOGLE_API_KEY=
+GOOGLE_CSE_ID=
+REDDIT_CLIENT_ID=
+REDDIT_CLIENT_SECRET=
+LLM_RATE_LIMIT_REQUESTS=10
+LLM_RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
-Run the full QA graph with persisted DB state:
+Notes:
+- current search is done through `ddgs`, not Google Custom Search
+- current Reddit discovery is via search query + crawl, not the Reddit API
+- `core/rate_limiter.py` exists but is not currently enforced by the API routes
+
+## Local Setup
+
+### 1. Create virtual environment
 
 ```bash
-backend/.venv/bin/python backend/sandbox/test_qa_rag.py \
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 2. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Create your `.env`
+
+```bash
+cp .env.example .env
+```
+
+Then add your real credentials and optional flags.
+
+### 4. Start the API
+
+```bash
+python3 app.py
+```
+
+You can also run:
+
+```bash
+python3 main.py
+```
+
+The app binds using:
+1. `PORT`
+2. `APP_PORT`
+3. config default
+
+Database initialization runs automatically during startup.
+
+## Docker
+
+The included [Dockerfile](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/Dockerfile):
+
+- uses `python:3.11-slim`
+- installs Python dependencies
+- installs Playwright Chromium dependencies
+- exposes port `7860`
+- starts `uvicorn app:app --host 0.0.0.0 --port 7860`
+
+Build and run locally:
+
+```bash
+docker build -t futurex-app .
+docker run -p 7860:7860 futurex-app
+```
+
+## CI/CD
+
+GitHub Actions workflow: [.github/workflows/ci-cd.yml](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/.github/workflows/ci-cd.yml)
+
+Current pipeline:
+- builds the Docker image on pushes and PRs to `main`
+- runs a smoke-test container on port `7860`
+- on push to `main`, deploys to EC2 over SSH
+- deployment script rebuilds the Docker image and restarts the `futurex` container
+
+Important deployment note:
+- the EC2 deployment currently does a hard reset to `origin/main` on the server
+
+## Diagnostics and Utilities
+
+### QA RAG diagnostic
+
+[sandbox/test_qa_rag.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/sandbox/test_qa_rag.py) can inspect retrieval and optionally run the full QA graph:
+
+```bash
+python3 sandbox/test_qa_rag.py \
   --conversation-id <conversation_id> \
-  --question "who had exhibited symptoms of depression" \
-  --retrieval-query "who among potential users has exhibited symptoms of depression" \
+  --question "Who are the main competitors?" \
+  --retrieval-query "main competitors for this startup idea"
+```
+
+With full graph:
+
+```bash
+python3 sandbox/test_qa_rag.py \
+  --conversation-id <conversation_id> \
+  --question "Who are the main competitors?" \
+  --retrieval-query "main competitors for this startup idea" \
   --full-graph
 ```
 
-This script prints:
-- the persisted chunk count for the conversation
-- whether QA used vector chunks or fallback context
-- the retrieved context preview
-- the generated answer preview when `--full-graph` is enabled
+### Graph export helper
 
----
+[sandbox/draw_graph.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/sandbox/draw_graph.py) generates a Mermaid PNG for the main LangGraph flow.
 
-## 🔁 Conversation Flow (UI)
+### Legacy migration helper
 
-```
-Step 1 — Initial Form
-  User fills: Idea Name, Your Name, Ideal Customer, Problem Statement
-  → Agent asks ONE clarifying question
+[qa_summary.py](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/qa_summary.py) is a small ad hoc SQL helper for adding `qa_summary` to `agent_states`. It is not part of the normal runtime.
 
-Step 2 — Cross Question
-  User answers the clarifying question
-  → Agent runs full web research pipeline (15-30 sec)
-  → Returns structured feasibility report
+## Known Implementation Notes
 
-Step 3 — Report Dashboard
-  Displays: Score, Idea Fit, Market Opportunity,
-            Competitor Landscape, Targeting, Next Step,
-            Agent Reasoning Chain
+- CORS is effectively wide open in `app.py` right now via `allow_origins=["*"]`.
+- `ALLOWED_ORIGINS` exists in settings but is not currently wired into `CORSMiddleware`.
+- `EMBEDDING_LOCAL_FILES_ONLY` is defined in `rag/embedder.py` but is not currently passed into the embedder constructor.
+- `core/rate_limiter.py` remains in the repo as legacy logic, while the active scrape quota is implemented in `core/scrape_usage.py`.
+- `DOCUMENTATION.md` is the frontend-oriented integration guide; this README is the broader backend/project guide.
 
-  + QA Chat (post-report):
-      Ask unlimited follow-up questions grounded in your
-      scraped research data. Memory window: 7 turns verbatim
-      + rolling LLM summary of older turns.
-```
+## Related Docs
 
----
+- Backend/frontend integration guide: [DOCUMENTATION.md](/Users/krishnakumar/Desktop/AGILITY/futurex-feaser/DOCUMENTATION.md)
 
-## 🔍 Scraper Utilities (`scraper/web.py`)
-
-| Function | Purpose |
-|---|---|
-| `ddgs_url_scrapper(query)` | Fetches up to 10 results from DuckDuckGo (region: `in-en`) |
-| `filter_urls(urls, max=6)` | Removes `reddit.com`, `quora.com`, `zhihu.com`; caps list |
-| `extract_core(markdown)` | Keeps first 30 lines > 40 chars; hard cap 1500 chars |
-| `is_useful_content(text)` | Rejects pages with login walls, CAPTCHAs, timeouts |
-| `crawler_service(urls, seed_texts=None)` | Async crawl of all URLs; applies `extract_core`, quality checks, and optional semantic noise removal |
-
-### Noise Remover Logging
-
-When `NOISE_REMOVER_ENABLED=true`, semantic filter decisions are logged to:
-
-```text
-log/noise_remover.log
-```
-
-Each chunk decision includes:
-- similarity score
-- source URL
-- source title
-- kept/dropped status
-- chunk preview
-
-Example log lines:
-
-```text
-[NOISE_REMOVER][KEEP] score=0.6123 | url=... | title=... | chunk=...
-[NOISE_REMOVER][DROP] score=0.1842 | url=... | title=... | chunk=...
-```
-
----
-
-## 📝 License
+## License
 
 MIT

@@ -128,6 +128,7 @@ When the same `conversation_id` is sent back:
 - backend loads the original conversation context from the database
 - backend treats the new `idea` value as the user's reply to the clarifying question
 - backend runs research, analysis, persistence, and background embedding
+- backend enforces a Postgres-backed per-author scrape limit of 2 second-turn calls per UTC day
 - backend returns the full report in `analysis`
 
 ### Important frontend note

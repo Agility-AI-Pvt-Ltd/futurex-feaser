@@ -2,15 +2,24 @@ import os
 import sys
 import threading
 import traceback
+from time import perf_counter
 from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from api.routes import router
 from core.config import settings
 from core.database import init_db
+from core.logging import (
+    configure_logging,
+    log_event,
+    serialize_http_body,
+    sanitize_headers,
+)
+
+logger = configure_logging().getChild("http")
 
 
 def _initialize_database():
@@ -62,6 +71,68 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def log_http_traffic(request: Request, call_next):
+    started_at = perf_counter()
+    request_body = await request.body()
+
+    log_event(
+        logger,
+        "http_request",
+        method=request.method,
+        path=request.url.path,
+        query=str(request.url.query),
+        client_ip=request.client.host if request.client else None,
+        headers=sanitize_headers(request.headers),
+        request_body=serialize_http_body(request_body, request.headers.get("content-type")),
+    )
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = round((perf_counter() - started_at) * 1000, 3)
+        logger.exception(
+            "http_response_error",
+            extra={
+                "event": "http_response_error",
+                "method": request.method,
+                "path": request.url.path,
+                "duration_ms": duration_ms,
+            },
+        )
+        raise
+
+    response_body = b""
+    if hasattr(response, "body") and response.body is not None:
+        response_body = response.body
+    else:
+        async for chunk in response.body_iterator:
+            response_body += chunk
+
+    duration_ms = round((perf_counter() - started_at) * 1000, 3)
+    response_headers = dict(response.headers)
+    response_headers.pop("content-length", None)
+
+    log_event(
+        logger,
+        "http_response",
+        method=request.method,
+        path=request.url.path,
+        status_code=response.status_code,
+        duration_ms=duration_ms,
+        headers=sanitize_headers(response.headers),
+        response_body=serialize_http_body(response_body, response.headers.get("content-type")),
+    )
+
+    return Response(
+        content=response_body,
+        status_code=response.status_code,
+        headers=response_headers,
+        media_type=response.media_type,
+        background=response.background,
+    )
 
 
 @app.exception_handler(Exception)
