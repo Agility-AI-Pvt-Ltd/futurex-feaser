@@ -6,33 +6,19 @@ import sys
 from ddgs import DDGS
 from crawl4ai import AsyncWebCrawler
 from core.config import settings
+from core.logging import configure_logging
 
+configure_logging()
 
-try:
-    import axiom_py
-    from axiom_py.logging import AxiomHandler
-    HAS_AXIOM = True
-except ImportError:
-    HAS_AXIOM = False
-
-# Configure logging
-logging.basicConfig(
-    filename="scraper.log",
-    filemode="a",
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-
-# Add Axiom handler if configured
-if HAS_AXIOM and settings.AXIOM_TOKEN and settings.AXIOM_DATASET:
-    try:
-        axiom_client = axiom_py.Client(settings.AXIOM_TOKEN)
-        axiom_handler = AxiomHandler(axiom_client, settings.AXIOM_DATASET)
-        # Inherit root logger level
-        axiom_handler.setLevel(logging.INFO)
-        logging.getLogger().addHandler(axiom_handler)
-    except Exception as e:
-        logging.error(f"Failed to initialize Axiom logger: {e}")
+root_logger = logging.getLogger()
+if not any(getattr(handler, "_futurex_scraper_file", False) for handler in root_logger.handlers):
+    scraper_file_handler = logging.FileHandler("scraper.log")
+    scraper_file_handler._futurex_scraper_file = True
+    scraper_file_handler.setLevel(logging.INFO)
+    scraper_file_handler.setFormatter(
+        logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+    )
+    root_logger.addHandler(scraper_file_handler)
 
 LOG_DIR = "log"
 NOISE_REMOVER_LOG_PATH = os.path.join(LOG_DIR, "noise_remover.log")
