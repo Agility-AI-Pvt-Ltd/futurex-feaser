@@ -52,3 +52,5 @@ venv/
 
 # Docker (optional)
 docker-compose.override.yml
+
+sandbox/frontend_lecturebot
