@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # ── OpenAI ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = Field(default="")
 
+    # ── Legacy LLM Rate Limiting ─────────────────────────────────────────────
+    LLM_RATE_LIMIT_REQUESTS: int = Field(default=10)
+    LLM_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60)
+
+    # ── Scrape Rate Limiting ─────────────────────────────────────────────────
+    SCRAPE_DAILY_LIMIT: int = Field(default=2)
+
     # ── Noise Remover ────────────────────────────────────────────────────────
     NOISE_REMOVER_ENABLED: bool = Field(default=False)
     NOISE_REMOVER_THRESHOLD: float = Field(default=0.4)

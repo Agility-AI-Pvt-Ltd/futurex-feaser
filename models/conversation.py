@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, String, Text, DateTime, Integer, JSON
+from sqlalchemy import Column, String, Text, DateTime, Integer, JSON, Date, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -58,3 +58,25 @@ class FeasibilityReport(Base):
     targeting = Column(Text)
     next_step = Column(Text)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class AuthorDailyUsage(Base):
+    """
+    Tracks how many scrape-triggering requests an author has made on a given UTC day.
+    """
+    __tablename__ = "author_daily_usage"
+    __table_args__ = (
+        UniqueConstraint("author_id", "usage_date", name="uq_author_daily_usage_author_date"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    author_id = Column(String, nullable=False, index=True)
+    usage_date = Column(Date, nullable=False, index=True)
+    scrape_requests_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
