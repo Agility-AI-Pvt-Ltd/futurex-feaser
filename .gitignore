@@ -33,6 +33,7 @@ scraper.log
 __pycache__/
 *.pyc
 
+__pycache__
 
 # Python
 __pycache__/

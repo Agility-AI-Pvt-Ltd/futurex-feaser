@@ -7,6 +7,7 @@ import uuid
 from api.dependencies import (
     get_db
 )
+from core.scrape_usage import enforce_daily_scrape_limit
 from models import ChatSession, AgentStateModel, FeasibilityReport
 from pipeline.graph import app as langgraph_app
 from pipeline.qa_graph import qa_app as qa_langgraph_app, get_qa_graph_mermaid
@@ -64,6 +65,7 @@ async def chat_endpoint(
     problem_solved = input_data.problem_solved
     ideal_customer = input_data.ideal_customer
     current_message = input_data.idea
+    effective_author_id = input_data.authorId
 
     initial_analysis = ""
     if conv_id:
@@ -75,12 +77,16 @@ async def chat_endpoint(
             original_idea = existing.idea or original_idea
             problem_solved = existing.what_problem_it_solves or problem_solved
             ideal_customer = existing.ideal_customer or ideal_customer
+            effective_author_id = existing.authorId or effective_author_id
             current_message = input_data.idea  # The user's newest reply
             
         if state_model:
             initial_analysis = state_model.analysis or ""
     else:
         conv_id = str(uuid.uuid4())
+
+    if not is_new_chat:
+        enforce_daily_scrape_limit(db, effective_author_id)
 
     history_dicts = []
     if not is_new_chat and conv_id:
@@ -107,7 +113,7 @@ async def chat_endpoint(
     result = await langgraph_app.ainvoke(initial_state)
 
     new_entry = ChatSession(
-        authorId=input_data.authorId,
+        authorId=effective_author_id,
         conversation_id=conv_id,
         user_name=input_data.user_name,
         idea=original_idea,
@@ -181,6 +187,16 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
     conv_id = input_data.conversation_id
     question = input_data.question
 
+    first_session = (
+        db.query(ChatSession)
+        .filter(ChatSession.conversation_id == conv_id)
+        .order_by(ChatSession.timestamp.asc())
+        .first()
+    )
+
+    if not first_session:
+        return QaResponse(answer="Could not find chat history for this conversation.")
+
     # ── Load persisted state ───────────────────────────────────────────────────
     state_model = db.query(AgentStateModel).filter(AgentStateModel.conversation_id == conv_id).first()
     if not state_model:
@@ -189,9 +205,6 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
     sessions = db.query(ChatSession).filter(
         ChatSession.conversation_id == conv_id
     ).order_by(ChatSession.timestamp.asc()).all()
-
-    if not sessions:
-        return QaResponse(answer="Could not find chat history for this conversation.")
 
     history_dicts = [{"user": s.human_message, "ai": s.ai_message} for s in sessions]
 
