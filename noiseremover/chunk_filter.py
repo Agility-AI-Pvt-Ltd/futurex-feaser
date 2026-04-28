@@ -13,6 +13,10 @@ def _get_sentence_transformer(model_name: str):
     return SentenceTransformer(model_name)
 
 
+def preload_sentence_transformer_model(model_name: str) -> None:
+    _get_sentence_transformer(model_name)
+
+
 class ChunkFilter:
     def __init__(
         self,

@@ -1,7 +1,10 @@
-import os
-from typing import Dict, List
+from pathlib import Path
+from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -29,6 +32,7 @@ class Settings(BaseSettings):
 
     # ── OpenAI ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = Field(default="")
+    OPENAI_MODEL_NAME: str = Field(default="gpt-4o-mini")
 
     # ── Legacy LLM Rate Limiting ─────────────────────────────────────────────
     LLM_RATE_LIMIT_REQUESTS: int = Field(default=10)
@@ -48,6 +52,35 @@ class Settings(BaseSettings):
     # ── Axiom Logging ────────────────────────────────────────────────────────
     AXIOM_TOKEN: str = Field(default="")
     AXIOM_DATASET: str = Field(default="")
+
+    # ── Lecturebot merge settings ───────────────────────────────────────────
+    LECTURE_LOG_LEVEL: str = Field(default="INFO")
+    LECTURE_LOG_RAG_CHUNK_CHARS: int = Field(default=600)
+    LECTURE_LOG_PROMPT_CHARS: int = Field(default=2000)
+    LECTURE_RECENT_HISTORY_MESSAGES: int = Field(default=8)
+    LECTURE_RETRIEVAL_HISTORY_MESSAGES: int = Field(default=4)
+    LECTURE_SUMMARY_TRIGGER_MESSAGES: int = Field(default=10)
+    LECTURE_MEMORY_SUMMARY_CHARS: int = Field(default=3000)
+    LECTURE_OPENAI_MODEL_NAME: str = Field(default="gpt-4o-mini")
+    LECTURE_TRANSCRIPT_STORAGE_PATH: str = Field(default="transcripts_data")
+    LECTURE_QDRANT_COLLECTION_NAME: str = Field(default="lecture_transcripts")
+    LECTURE_QDRANT_PATH: str = Field(default="lecture_qdrant")
+    LECTURE_EMBEDDING_MODEL: str = Field(default="all-MiniLM-L6-v2")
+    LECTURE_VECTOR_SIZE: int = Field(default=384)
+
+    @property
+    def lecture_transcript_storage_path(self) -> str:
+        raw_path = Path(self.LECTURE_TRANSCRIPT_STORAGE_PATH).expanduser()
+        if raw_path.is_absolute():
+            return str(raw_path)
+        return str((BASE_DIR / raw_path).resolve())
+
+    @property
+    def lecture_qdrant_path(self) -> str:
+        raw_path = Path(self.LECTURE_QDRANT_PATH).expanduser()
+        if raw_path.is_absolute():
+            return str(raw_path)
+        return str((BASE_DIR / raw_path).resolve())
 
 
 # Single shared instance — import this everywhere
