@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     # ── Axiom Logging ────────────────────────────────────────────────────────
     AXIOM_TOKEN: str = Field(default="")
     AXIOM_DATASET: str = Field(default="")
+    QA_TOP_K: int = Field(default=5)
     RAG_LOG_CHUNK_CHARS: int = Field(default=400)
     RAG_RUN_LOG_DIR: str = Field(default="rag_run_logs")
 
