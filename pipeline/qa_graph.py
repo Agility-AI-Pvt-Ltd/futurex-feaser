@@ -41,6 +41,24 @@ def _append_trace(state: AgentState, step: str, message: str, metadata: dict | N
     return trace
 
 
+def _is_low_signal_qa_question(question: str) -> bool:
+    normalized = (question or "").strip().lower()
+    if not normalized:
+        return True
+    if len(normalized) < 10:
+        return True
+
+    tokens = [token for token in normalized.replace("?", " ").split() if token]
+    if len(tokens) < 3:
+        return True
+
+    low_signal_questions = {
+        "ok", "okay", "why", "how", "what", "tell me", "more", "anything else",
+        "hmm", "test", "testing",
+    }
+    return normalized in low_signal_questions
+
+
 # ── Nodes ──────────────────────────────────────────────────────────────────────
 def qa_load_state_node(state: AgentState) -> dict:
     print("--- QA NODE: qa_load_state_node ---")
@@ -57,6 +75,55 @@ def qa_load_state_node(state: AgentState) -> dict:
         },
     )
     return {"trace": trace}
+
+
+def qa_filter_node(state: AgentState) -> dict:
+    print("--- QA NODE: qa_filter_node ---")
+    question = (state.get("question") or "").strip()
+    if _is_low_signal_qa_question(question):
+        message = (
+            "Please ask a more specific follow-up question so I can run retrieval usefully. "
+            "For example, ask about competitors, pricing, demand signals, or target users."
+        )
+        trace = _append_trace(
+            state,
+            "qa_filter",
+            "Blocked vague QA question before retrieval.",
+            {"question": question, "blocked": True},
+        )
+        return {
+            "input_valid": False,
+            "validation_message": message,
+            "qa_answer": message,
+            "top_chunks": [],
+            "rag_context": "",
+            "trace": trace,
+        }
+
+    trace = _append_trace(
+        state,
+        "qa_filter",
+        "QA question passed validation.",
+        {"question": question, "blocked": False},
+    )
+    return {"input_valid": True, "trace": trace}
+
+
+def route_qa_filter(state: AgentState) -> str:
+    if not state.get("input_valid", True):
+        print("--- QA ROUTER: Routing to qa_invalid_response_node ---")
+        return "qa_invalid_response"
+    print("--- QA ROUTER: Routing to qa_memory_node ---")
+    return "qa_memory"
+
+
+def qa_invalid_response_node(state: AgentState) -> dict:
+    print("--- QA NODE: qa_invalid_response_node ---")
+    return {
+        "qa_answer": state.get("validation_message")
+        or "Please ask a more specific question.",
+        "top_chunks": [],
+    }
 
 
 def qa_memory_node(state: AgentState) -> dict:
@@ -270,16 +337,27 @@ def qa_generate_answer_node(state: AgentState) -> dict:
 # ── Graph wiring ───────────────────────────────────────────────────────────────
 qa_workflow = StateGraph(AgentState)
 qa_workflow.add_node("qa_load_state",      qa_load_state_node)
+qa_workflow.add_node("qa_filter",          qa_filter_node)
+qa_workflow.add_node("qa_invalid_response", qa_invalid_response_node)
 qa_workflow.add_node("qa_memory",          qa_memory_node)        # sliding-window + summarize
 qa_workflow.add_node("qa_modify_query",    qa_modify_query_node)
 qa_workflow.add_node("qa_retrieve_context", qa_retrieve_context_node)
 qa_workflow.add_node("qa_generate_answer", qa_generate_answer_node)
 
 qa_workflow.add_edge(START,                  "qa_load_state")
-qa_workflow.add_edge("qa_load_state",        "qa_memory")
+qa_workflow.add_edge("qa_load_state",        "qa_filter")
+qa_workflow.add_conditional_edges(
+    "qa_filter",
+    route_qa_filter,
+    {
+        "qa_invalid_response": "qa_invalid_response",
+        "qa_memory": "qa_memory",
+    },
+)
 qa_workflow.add_edge("qa_memory",            "qa_modify_query")
 qa_workflow.add_edge("qa_modify_query",      "qa_retrieve_context")
 qa_workflow.add_edge("qa_retrieve_context",  "qa_generate_answer")
+qa_workflow.add_edge("qa_invalid_response",  END)
 qa_workflow.add_edge("qa_generate_answer",   END)
 
 qa_app = qa_workflow.compile()
