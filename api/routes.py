@@ -24,6 +24,7 @@ from lecturebot.schemas import (
     MessageOut as LectureMessageOut,
     TranscriptAssetOut as LectureTranscriptAssetOut,
     TranscriptMetadataOut as LectureTranscriptMetadataOut,
+    TranscriptUpdate,
     TranscriptReprocessResponse,
     UploadResponse,
 )
@@ -639,6 +640,45 @@ def list_sessions(db: Session = Depends(get_db)):
             status_code=500,
             detail="Database error while loading chat sessions.",
         ) from exc
+
+
+@router.patch("/transcripts/{transcript_id}", response_model=LectureTranscriptAssetOut, tags=["Transcript"])
+def update_transcript(transcript_id: int, payload: TranscriptUpdate, db: Session = Depends(get_db)):
+    try:
+        transcript = db.query(LectureTranscriptAsset).filter_by(id=transcript_id).first()
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while loading transcript metadata.",
+        ) from exc
+
+    if not transcript:
+        raise HTTPException(status_code=404, detail="Transcript not found.")
+        
+    if payload.session_name is not None:
+        transcript.session_name = payload.session_name
+    if payload.source_name is not None:
+        transcript.source_name = payload.source_name
+        
+    if transcript.metadata_entry:
+        if payload.course_name is not None:
+            transcript.metadata_entry.course_name = payload.course_name
+        if payload.instructor_name is not None:
+            transcript.metadata_entry.instructor_name = payload.instructor_name
+        if payload.session_date is not None:
+            transcript.metadata_entry.session_date = payload.session_date
+        if payload.description is not None:
+            transcript.metadata_entry.description = payload.description
+        if payload.tags is not None:
+            transcript.metadata_entry.tags = payload.tags
+            
+    try:
+        db.commit()
+        db.refresh(transcript)
+        return transcript
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Database error while updating transcript.") from exc
 
 
 @router.get("/transcripts", response_model=list[LectureTranscriptAssetOut], tags=["Transcript"])
