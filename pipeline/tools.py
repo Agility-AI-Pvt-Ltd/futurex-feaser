@@ -7,6 +7,7 @@ Add new tools here and wire them into graph.py.
 
 import asyncio
 import json
+import re
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
 from pipeline.prompts.cross_question import get_cross_question_prompt
@@ -20,6 +21,69 @@ from scraper.web import (
 
 from core.database import SessionLocal
 from models.conversation import ChatSession
+
+
+LOW_SIGNAL_WORDS = {
+    "app", "platform", "tool", "startup", "business", "service", "product",
+    "idea", "something", "anything", "random", "test", "testing",
+}
+
+
+def _tokenize_text(value: str) -> list[str]:
+    return re.findall(r"[a-zA-Z]{2,}", (value or "").lower())
+
+
+def _looks_like_gibberish(value: str) -> bool:
+    letters = re.findall(r"[a-zA-Z]", value or "")
+    if not letters:
+        return True
+    joined = "".join(letters).lower()
+    if len(joined) < 4:
+        return True
+    vowel_ratio = sum(ch in "aeiou" for ch in joined) / max(len(joined), 1)
+    unique_ratio = len(set(joined)) / max(len(joined), 1)
+    return vowel_ratio < 0.2 or unique_ratio < 0.25
+
+
+def _validate_chat_input(state: AgentState) -> tuple[bool, str]:
+    idea = (state.get("idea") or "").strip()
+    problem_solved = (state.get("problem_solved") or "").strip()
+    ideal_customer = (state.get("ideal_customer") or "").strip()
+    current_message = (state.get("current_message") or "").strip()
+
+    idea_tokens = _tokenize_text(idea)
+    problem_tokens = _tokenize_text(problem_solved)
+    customer_tokens = _tokenize_text(ideal_customer)
+    low_signal_idea_tokens = [token for token in idea_tokens if token not in LOW_SIGNAL_WORDS]
+
+    if len(low_signal_idea_tokens) < 2 or _looks_like_gibberish(idea):
+        return (
+            False,
+            "Please share a clearer startup idea before I run web research. "
+            "Mention what you are building in a meaningful phrase, not a random or vague word.",
+        )
+
+    if len(problem_tokens) < 4 or _looks_like_gibberish(problem_solved):
+        return (
+            False,
+            "Please describe the real problem your idea solves in a little more detail before I run research.",
+        )
+
+    if len(customer_tokens) < 2 or _looks_like_gibberish(ideal_customer):
+        return (
+            False,
+            "Please describe the target customer more clearly before I run research.",
+        )
+
+    if not state.get("is_new_chat", True):
+        reply_tokens = _tokenize_text(current_message)
+        if len(reply_tokens) < 4 or _looks_like_gibberish(current_message):
+            return (
+                False,
+                "Your follow-up reply is too vague for web research. Please answer with a more specific description of features, market, or users.",
+            )
+
+    return True, ""
 
 
 def cross_question_node(state: AgentState) -> dict:
@@ -55,7 +119,110 @@ def load_context_node(state: AgentState) -> dict:
     return {"conversation_history": state.get("conversation_history", [])}
 
 
+def chat_filter_node(state: AgentState) -> dict:
+    """
+    Lightweight gate to avoid expensive scraping for obviously vague or
+    meaningless idea inputs.
+    """
+    print("--- NODE EXECUTING: chat_filter_node ---")
+    is_valid, message = _validate_chat_input(state)
+    return {
+        "input_valid": is_valid,
+        "validation_message": message,
+    }
+
+
+def idea_vagueness_filter_node(state: AgentState) -> dict:
+    """
+    LLM-powered gatekeeper that determines whether the user's startup idea
+    is genuinely meaningful enough to warrant web research and analysis.
+
+    Returns::
+        is_vague (bool)    – True  → idea is too vague / nonsensical
+        vague_message (str) – friendly, specific feedback for the user
+    """
+    print("--- NODE EXECUTING: idea_vagueness_filter_node ---")
+    from core.llm_factory import get_llm
+
+    idea            = (state.get("idea")            or "").strip()
+    problem_solved  = (state.get("problem_solved")  or "").strip()
+    ideal_customer  = (state.get("ideal_customer")  or "").strip()
+
+    # ── Skip LLM gate for follow-up messages (only gate new ideas) ────────────
+    if not state.get("is_new_chat", True):
+        return {"is_vague": False, "vague_message": ""}
+
+    prompt = (
+        "You are an expert startup evaluator acting as a strict quality gatekeeper.\n"
+        "Your ONLY job is to decide whether the startup idea below is specific enough\n"
+        "to be worth running deep market research on.\n\n"
+        "Reject an idea when it is:\n"
+        "  • Gibberish or random characters (e.g. 'asdf', 'xyz123')\n"
+        "  • Extremely generic with zero domain specificity (e.g. 'app idea', 'startup', 'something cool')\n"
+        "  • A single meaningless word or phrase that conveys no real problem or domain\n"
+        "  • Intentionally blank or a clear test input\n\n"
+        "Accept an idea when it:\n"
+        "  • Names a concrete problem, domain, or user group — even briefly\n"
+        "  • Has at least a partial direction (e.g. 'food delivery for students', 'AI tutor for kids')\n"
+        "  • Is a rough draft that shows genuine intent\n\n"
+        f"Idea: {idea!r}\n"
+        f"Problem it solves: {problem_solved!r}\n"
+        f"Target customer: {ideal_customer!r}\n\n"
+        "Respond with ONLY valid JSON — no markdown, no extra text:\n"
+        '{"is_vague": <true|false>, "reason": "<one sentence explaining your verdict>"}'
+    )
+
+    try:
+        llm = get_llm(temperature=0)
+        raw = llm.invoke(prompt).content.strip()
+        # Strip accidental markdown fences
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        data = json.loads(raw)
+        is_vague = bool(data.get("is_vague", False))
+        reason   = str(data.get("reason", ""))
+    except Exception as exc:
+        print(f"  [VaguenessFilter] LLM/parse error — defaulting to not-vague: {exc}")
+        is_vague = False
+        reason   = ""
+
+    if is_vague:
+        vague_message = (
+            f"Your idea seems too vague for me to run a meaningful analysis. {reason} "
+            "Please describe your idea more specifically — mention the problem you're solving, "
+            "your target users, and the domain (e.g. 'AI-powered scheduling tool for remote teams')."
+        )
+        print(f"  [VaguenessFilter] Idea flagged as VAGUE. Reason: {reason}")
+    else:
+        vague_message = ""
+        print("  [VaguenessFilter] Idea looks specific enough — proceeding.")
+
+    return {"is_vague": is_vague, "vague_message": vague_message}
+
+
+def vague_idea_response_node(state: AgentState) -> dict:
+    """
+    Terminal node reached when the LLM gatekeeper marks the idea as vague.
+    Returns a friendly, actionable message to the user.
+    """
+    print("--- NODE EXECUTING: vague_idea_response_node ---")
+    message = state.get("vague_message") or (
+        "Your idea is too vague for me to run a meaningful analysis. "
+        "Please describe it more specifically — include the problem, target users, "
+        "and the domain (e.g. 'AI scheduling tool for remote teams')."
+    )
+    return {"analysis": message}
+
+
+def invalid_chat_response_node(state: AgentState) -> dict:
+    print("--- NODE EXECUTING: invalid_chat_response_node ---")
+    message = state.get("validation_message") or (
+        "Please provide a clearer startup idea before I run research."
+    )
+    return {"analysis": message}
+
+
 def modify_query_node(state: AgentState) -> dict:
+
     """
     Tool: Modify User Query
     Asks the LLM to generate 3 targeted search queries covering:
