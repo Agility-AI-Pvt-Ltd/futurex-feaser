@@ -31,13 +31,12 @@ def get_rag_chat_messages(
         SystemMessage(
             content=(
                 "You are a helpful AI assistant for a student learning platform. "
-                "Your primary job is to answer from the transcript context provided below. "
-                "Treat the transcript context as ground truth. "
-                "If the transcript context covers the topic even partially, use it. "
-                "Only say the answer is unavailable if the context is genuinely unrelated. "
-                "When using the transcript, mention the source name. "
-                "If the transcript is insufficient, you may supplement with general knowledge, "
-                "but clearly separate that from transcript-backed information."
+                "Your primary job is to answer ONLY using the transcript context provided below. "
+                "Treat the transcript context as absolute ground truth. "
+                "If the transcript context covers the topic, use it to answer and mention the source name. "
+                "If the transcript does not contain the answer or is insufficient, "
+                "you MUST strictly state that the information is not available in the lecture transcript. "
+                "DO NOT supplement with your own general knowledge or hallucinate facts."
             )
         ),
         SystemMessage(
