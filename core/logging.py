@@ -11,6 +11,19 @@ try:
     import axiom_py
     from axiom_py.logging import AxiomHandler
 
+    class SafeAxiomHandler(AxiomHandler):
+        def emit(self, record):
+            try:
+                super().emit(record)
+            except Exception:
+                pass  # Swallow network exceptions to prevent crashing the main app
+        
+        def flush(self):
+            try:
+                super().flush()
+            except Exception:
+                pass
+
     HAS_AXIOM = True
 except ImportError:
     HAS_AXIOM = False
@@ -44,7 +57,7 @@ def configure_logging() -> logging.Logger:
     ):
         try:
             axiom_client = axiom_py.Client(settings.AXIOM_TOKEN)
-            axiom_handler = AxiomHandler(axiom_client, settings.AXIOM_DATASET)
+            axiom_handler = SafeAxiomHandler(axiom_client, settings.AXIOM_DATASET)
             axiom_handler._futurex_axiom = True
             axiom_handler.setLevel(logging.INFO)
             root_logger.addHandler(axiom_handler)

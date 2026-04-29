@@ -30,21 +30,10 @@ def _recent_history(history: list[dict], limit: int) -> list[dict]:
 
 
 def _build_retrieval_query(state: ChatPipelineState) -> str:
-    recent_user_messages = [
-        message["content"].strip()
-        for message in _recent_history(
-            state.get("history", []),
-            settings.LECTURE_RETRIEVAL_HISTORY_MESSAGES,
-        )
-        if message.get("role") == "user"
-        and message.get("content", "").strip().lower() not in LOW_SIGNAL_USER_MESSAGES
-    ]
-    parts = [
-        state.get("memory_summary", ""),
-        "\n".join(recent_user_messages),
-        state.get("resolved_question", state["question"]),
-    ]
-    return "\n\n".join(part for part in parts if part.strip())
+    # The analyze_question_node already uses the LLM to rewrite the user's question
+    # into a standalone 'resolved_question' that incorporates necessary context.
+    # We should search ONLY using this focused resolved_question for maximum semantic accuracy.
+    return state.get("resolved_question", state["question"]).strip()
 
 
 def _fallback_question_analysis(state: ChatPipelineState) -> dict:
