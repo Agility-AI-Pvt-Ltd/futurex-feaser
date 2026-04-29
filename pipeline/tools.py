@@ -10,7 +10,12 @@ import json
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
 from pipeline.prompts.cross_question import get_cross_question_prompt
-from scraper.web import ddgs_url_scrapper, crawler_service, filter_urls
+from scraper.web import (
+    create_scrape_run_logger,
+    crawler_service_with_logging,
+    ddgs_url_scrapper,
+    filter_urls,
+)
 
 
 from core.database import SessionLocal
@@ -110,49 +115,80 @@ async def web_research_node(state: AgentState) -> dict:
     print("--- NODE EXECUTING: web_research_node ---")
     idea = state['idea']
     problem_solved = state['problem_solved']
+    conversation_id = state.get("conversation_id", "")
+    run_logger = create_scrape_run_logger(conversation_id=conversation_id, idea=idea)
 
-    # Use multi-query list if available; fall back to single optimized_query
-    queries = state.get('optimized_queries') or []
-    if not queries:
-        fallback = state.get('optimized_query') or f"{idea} {problem_solved} market competitors"
-        queries = [fallback]
+    try:
+        run_logger.section("WEB RESEARCH INPUT")
+        run_logger.write(f"idea: {idea}")
+        run_logger.write(f"problem_solved: {problem_solved}")
+        run_logger.write(f"conversation_id: {conversation_id}")
+        run_logger.write("")
 
-    seen = set()
-    all_urls = []
+        # Use multi-query list if available; fall back to single optimized_query
+        queries = state.get('optimized_queries') or []
+        if not queries:
+            fallback = state.get('optimized_query') or f"{idea} {problem_solved} market competitors"
+            queries = [fallback]
 
-    def _add_urls(items):
-        for item in items:
-            if item["url"] not in seen:
-                seen.add(item["url"])
-                all_urls.append(item)
+        run_logger.section("OPTIMIZED QUERIES")
+        for query in queries:
+            run_logger.write(query)
+        run_logger.write("")
 
-    # Run all targeted queries; apply domain-filter + cap on general results
-    for q in queries:
-        print(f"  [Search] Query: {q}")
-        raw = ddgs_url_scrapper(q)
-        _add_urls(filter_urls(raw, max_results=6))  # strips reddit/quora/zhihu, caps at 6
+        seen = set()
+        all_urls = []
 
-    # Reddit-specific search — intentionally unfiltered (we WANT reddit.com URLs here)
-    reddit_query = f"{queries[0]} site:reddit.com"
-    print(f"  [Search] Reddit query: {reddit_query}")
-    _add_urls(ddgs_url_scrapper(reddit_query))
+        def _add_urls(items):
+            for item in items:
+                if item["url"] not in seen:
+                    seen.add(item["url"])
+                    all_urls.append(item)
 
-    print(f"  [Search] Total unique URLs to crawl: {len(all_urls)}")
+        # Run all targeted queries; apply domain-filter + cap on general results
+        for q in queries:
+            print(f"  [Search] Query: {q}")
+            raw = ddgs_url_scrapper(q, run_logger=run_logger)
+            _add_urls(filter_urls(raw, max_results=6, run_logger=run_logger))
 
-    if not all_urls:
-        return {"search_results": "No relevant data found on the web."}
+        # Reddit-specific search — intentionally unfiltered (we WANT reddit.com URLs here)
+        reddit_query = f"{queries[0]} site:reddit.com"
+        print(f"  [Search] Reddit query: {reddit_query}")
+        _add_urls(ddgs_url_scrapper(reddit_query, run_logger=run_logger))
 
-    seed_texts = [
-        idea,
-        problem_solved,
-        *queries,
-        f"{idea} startup competitors",
-        f"{idea} target market",
-        f"{problem_solved} existing solutions",
-    ]
+        run_logger.section("DEDUPED URLS TO CRAWL")
+        run_logger.write(f"count: {len(all_urls)}")
+        run_logger.write("")
+        for item in all_urls:
+            run_logger.write(f"title: {item['title']}")
+            run_logger.write(f"url: {item['url']}")
+            run_logger.write("")
 
-    results_text = await crawler_service(all_urls, seed_texts=seed_texts)
-    return {"search_results": results_text}
+        print(f"  [Search] Total unique URLs to crawl: {len(all_urls)}")
+
+        if not all_urls:
+            run_logger.section("FINAL_AGGREGATED_SEARCH_RESULTS")
+            run_logger.write("No relevant data found on the web.")
+            run_logger.section("SCRAPE RUN END")
+            return {"search_results": "No relevant data found on the web."}
+
+        seed_texts = [
+            idea,
+            problem_solved,
+            *queries,
+            f"{idea} startup competitors",
+            f"{idea} target market",
+            f"{problem_solved} existing solutions",
+        ]
+
+        results_text = await crawler_service_with_logging(
+            all_urls,
+            seed_texts=seed_texts,
+            run_logger=run_logger,
+        )
+        return {"search_results": results_text or "No relevant data found on the web."}
+    finally:
+        run_logger.close()
 
 
 def llm_agent_node(state: AgentState) -> dict:

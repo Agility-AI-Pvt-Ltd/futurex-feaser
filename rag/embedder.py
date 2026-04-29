@@ -3,9 +3,10 @@ import json
 import logging
 from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from core.logging import get_logger, log_event, log_exception
 
 # Try to get the logger, if not, it will be standard
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Lazy initialization so the app doesn't crash if imported before pip install
 embedder = None
@@ -74,6 +75,10 @@ def embed_conversation_context(conversation_id: str, search_results: str, analys
     )
     
     chunks = []
+    source_counts = {
+        "web_research": 0,
+        "feasibility_report": 0,
+    }
     
     # Chunk the search results
     if search_results:
@@ -81,6 +86,7 @@ def embed_conversation_context(conversation_id: str, search_results: str, analys
         sr_chunks = text_splitter.split_text(search_results)
         for chunk in sr_chunks:
             chunks.append({"text": chunk, "source": "web_research"})
+            source_counts["web_research"] += 1
             
     # Chunk the analysis (report)
     if analysis:
@@ -99,11 +105,31 @@ def embed_conversation_context(conversation_id: str, search_results: str, analys
         analysis_chunks = text_splitter.split_text(analysis_text)
         for chunk in analysis_chunks:
             chunks.append({"text": chunk, "source": "feasibility_report"})
+            source_counts["feasibility_report"] += 1
             
     if not chunks:
         logger.info("Nothing to embed.")
         print("  [RAG] No text found to embed.")
+        log_event(
+            logger,
+            "rag_chunking_empty",
+            conversation_id=conversation_id,
+            web_research_chunk_count=0,
+            feasibility_report_chunk_count=0,
+            total_chunk_count=0,
+        )
         return
+
+    log_event(
+        logger,
+        "rag_chunking_complete",
+        conversation_id=conversation_id,
+        web_research_chunk_count=source_counts["web_research"],
+        feasibility_report_chunk_count=source_counts["feasibility_report"],
+        total_chunk_count=len(chunks),
+        chunk_size=500,
+        chunk_overlap=50,
+    )
         
     texts = [c["text"] for c in chunks]
     metadatas = [{"conversation_id": conversation_id, "source": c["source"], "text": c["text"]} for c in chunks]
@@ -131,7 +157,27 @@ def embed_conversation_context(conversation_id: str, search_results: str, analys
             wait=True
         )
         logger.info(f"Successfully embedded {len(points)} chunks for conversation {conversation_id}")
+        log_event(
+            logger,
+            "rag_embedding_complete",
+            conversation_id=conversation_id,
+            collection_name=COLLECTION_NAME,
+            embedded_chunk_count=len(points),
+            web_research_chunk_count=source_counts["web_research"],
+            feasibility_report_chunk_count=source_counts["feasibility_report"],
+            embedding_model=EMBEDDING_MODEL_NAME,
+        )
         print(f"  [RAG] ✅ Successfully uploaded {len(points)} chunks to Qdrant for Session {conversation_id}...\n")
     except Exception as e:
-        logger.error(f"Error embedding context: {e}")
+        log_exception(
+            logger,
+            "rag_embedding_error",
+            conversation_id=conversation_id,
+            collection_name=COLLECTION_NAME,
+            attempted_chunk_count=len(chunks),
+            web_research_chunk_count=source_counts["web_research"],
+            feasibility_report_chunk_count=source_counts["feasibility_report"],
+            embedding_model=EMBEDDING_MODEL_NAME,
+            error=str(e),
+        )
         print(f"  [RAG] ❌ Failed to embed context: {e}")
