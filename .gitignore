@@ -38,6 +38,10 @@ __pycache__
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.py[cod]
+**/__pycache__/
 .env
 
 # Virtual env
@@ -46,6 +50,9 @@ venv/
 
 # Logs
 *.log
+log/
+scrape_run_logs/
+rag_run_logs/
 
 # OS files
 .DS_Store

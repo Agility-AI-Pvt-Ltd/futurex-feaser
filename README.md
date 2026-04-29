@@ -181,6 +181,7 @@ NOISE_REMOVER_THRESHOLD=0.4
 NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
 AXIOM_TOKEN=
 AXIOM_DATASET=
+RAG_LOG_CHUNK_CHARS=400
 QDRANT_COLLECTION_NAME=transcripts
 LECTURE_TRANSCRIPT_STORAGE_PATH=transcripts_data
 LECTURE_QDRANT_COLLECTION_NAME=lecture_transcripts
@@ -195,6 +196,9 @@ Notes:
 - feasibility RAG currently uses local Qdrant storage under `qdrant_data/`
 - lecture RAG uses `LECTURE_QDRANT_PATH`
 - lecture transcript files are stored under `LECTURE_TRANSCRIPT_STORAGE_PATH`
+- feasibility RAG retrieval now emits structured Axiom events:
+  `rag_retrieval`, `rag_retrieval_hit`, `rag_retrieval_empty`, and `qa_rag_fallback_used`
+- `RAG_LOG_CHUNK_CHARS` controls how much of each retrieved chunk preview is sent to logs
 
 ## Local Development
 
