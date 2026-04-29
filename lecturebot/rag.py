@@ -140,10 +140,17 @@ def _build_filter(
     object_path: str = "",
 ) -> Filter | None:
     must_conditions: list[FieldCondition] = []
+    
+    # If transcript_id is provided, it uniquely identifies the transcript chunks.
+    # We do NOT want to filter by session_name or source_name in addition, 
+    # because if they were updated via the Admin UI, Qdrant will still have the old names 
+    # and the filter would fail.
     if transcript_id is not None:
         must_conditions.append(
             FieldCondition(key="transcript_id", match=MatchValue(value=transcript_id))
         )
+        return Filter(must=must_conditions)
+
     if object_path:
         must_conditions.append(
             FieldCondition(key="object_path", match=MatchValue(value=object_path))
