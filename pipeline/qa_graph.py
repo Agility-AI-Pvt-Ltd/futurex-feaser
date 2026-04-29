@@ -13,6 +13,7 @@ Memory:
 from datetime import datetime, timezone
 from langgraph.graph import StateGraph, START, END
 
+from core.logging import get_logger, log_event
 from pipeline.state import AgentState
 from pipeline.prompts.qa import get_qa_prompt
 from rag.retriever import conversation_chunk_count, retrieve_context
@@ -22,6 +23,7 @@ from core.llm_factory import get_llm
 # ── Memory constants ───────────────────────────────────────────────────────────
 QA_WINDOW_SIZE = 7          # recent turns kept verbatim in context
 QA_SUMMARIZE_THRESHOLD = 14 # compress when total history exceeds this
+logger = get_logger(__name__)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -201,6 +203,16 @@ def qa_retrieve_context_node(state: AgentState) -> dict:
         ).strip()
         context = fallback_context or "No relevant context found."
         print("  [QA] No vector chunks found, using persisted fallback context.")
+        log_event(
+            logger,
+            "qa_rag_fallback_used",
+            conversation_id=conv_id,
+            question=question,
+            retrieval_query=retrieval_query,
+            persisted_chunk_count=chunk_count,
+            fallback_has_analysis=bool(state.get("analysis")),
+            fallback_has_search_results=bool(state.get("search_results")),
+        )
 
     trace = _append_trace(
         state,

@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # ── Reddit ─────────────────────────────────────────────────────────────────
     REDDIT_CLIENT_ID: str = Field(default="")
     REDDIT_CLIENT_SECRET: str = Field(default="")
+    REDDIT_USER_AGENT: str = Field(default="futurex-feaser/1.0")
 
     # ── OpenAI ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = Field(default="")
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
 
     # ── Scrape Rate Limiting ─────────────────────────────────────────────────
     SCRAPE_DAILY_LIMIT: int = Field(default=2)
+    SCRAPE_RUN_LOG_DIR: str = Field(default="scrape_run_logs")
 
     # ── Noise Remover ────────────────────────────────────────────────────────
     NOISE_REMOVER_ENABLED: bool = Field(default=False)
@@ -52,6 +54,8 @@ class Settings(BaseSettings):
     # ── Axiom Logging ────────────────────────────────────────────────────────
     AXIOM_TOKEN: str = Field(default="")
     AXIOM_DATASET: str = Field(default="")
+    RAG_LOG_CHUNK_CHARS: int = Field(default=400)
+    RAG_RUN_LOG_DIR: str = Field(default="rag_run_logs")
 
     # ── Lecturebot merge settings ───────────────────────────────────────────
     LECTURE_LOG_LEVEL: str = Field(default="INFO")
@@ -78,6 +82,20 @@ class Settings(BaseSettings):
     @property
     def lecture_qdrant_path(self) -> str:
         raw_path = Path(self.LECTURE_QDRANT_PATH).expanduser()
+        if raw_path.is_absolute():
+            return str(raw_path)
+        return str((BASE_DIR / raw_path).resolve())
+
+    @property
+    def scrape_run_log_dir(self) -> str:
+        raw_path = Path(self.SCRAPE_RUN_LOG_DIR).expanduser()
+        if raw_path.is_absolute():
+            return str(raw_path)
+        return str((BASE_DIR / raw_path).resolve())
+
+    @property
+    def rag_run_log_dir(self) -> str:
+        raw_path = Path(self.RAG_RUN_LOG_DIR).expanduser()
         if raw_path.is_absolute():
             return str(raw_path)
         return str((BASE_DIR / raw_path).resolve())
