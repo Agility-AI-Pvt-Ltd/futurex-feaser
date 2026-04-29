@@ -68,6 +68,7 @@ class FeasibilityChatResponse(BaseModel):
     response: str
     conversation_id: str
     analysis: Optional[str] = None
+    is_vague: bool = False
 
 
 class QaInput(BaseModel):
@@ -219,6 +220,7 @@ async def _handle_feasibility_chat(
             response=vague_msg,
             conversation_id=conv_id,
             analysis=vague_msg,
+            is_vague=True,
         )
 
     new_entry = ChatSession(
