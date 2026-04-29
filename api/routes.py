@@ -209,6 +209,18 @@ async def _handle_feasibility_chat(
 
     result = await langgraph_app.ainvoke(initial_state)
 
+    # ── Vagueness gate: idea was too vague — skip DB writes and RAG ───────────
+    if result.get("is_vague", False):
+        vague_msg = result.get("analysis") or (
+            "Your idea is too vague for me to run a meaningful analysis. "
+            "Please describe it more specifically."
+        )
+        return FeasibilityChatResponse(
+            response=vague_msg,
+            conversation_id=conv_id,
+            analysis=vague_msg,
+        )
+
     new_entry = ChatSession(
         authorId=effective_author_id,
         conversation_id=conv_id,
