@@ -214,7 +214,7 @@ def search_similar(
             "result_count": len(chunks),
             "chunks": [
                 {
-                    "text": c["text"],
+                    "text": c["text"][:100] + ("..." if len(c["text"]) > 100 else ""),
                     "score": c["score"],
                     "source": c["source"]
                 }
@@ -222,6 +222,14 @@ def search_similar(
             ]
         }
     )
+
+    # Print chunks to the terminal for debugging
+    print(f"\n[RAG SEARCH] Retrieved {len(chunks)} chunks for query: '{query}'")
+    for i, c in enumerate(chunks, 1):
+        print(f"--- Chunk {i} (Score: {c['score']:.4f}) ---")
+        print(c['text'])
+        print("-" * 40)
+    print()
     return chunks
 
 
