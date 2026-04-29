@@ -57,6 +57,15 @@ class TranscriptMetadataOut(BaseModel):
         from_attributes = True
 
 
+class TranscriptUpdate(BaseModel):
+    session_name: Optional[str] = None
+    source_name: Optional[str] = None
+    course_name: Optional[str] = None
+    instructor_name: Optional[str] = None
+    session_date: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[str] = None
+
 class TranscriptAssetOut(BaseModel):
     id: int
     session_id: Optional[str] = None
