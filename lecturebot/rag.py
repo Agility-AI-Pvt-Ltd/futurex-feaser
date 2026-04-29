@@ -198,6 +198,22 @@ def search_similar(
         "lecture_rag.search result_count=%s query=%s",
         len(chunks),
         truncate_for_log(query, settings.LECTURE_LOG_PROMPT_CHARS),
+        extra={
+            "axiom_event": "rag_search",
+            "query": query,
+            "transcript_id": transcript_id,
+            "session_name": session_name,
+            "top_k": top_k,
+            "result_count": len(chunks),
+            "chunks": [
+                {
+                    "text": c["text"],
+                    "score": c["score"],
+                    "source": c["source"]
+                }
+                for c in chunks
+            ]
+        }
     )
     return chunks
 
