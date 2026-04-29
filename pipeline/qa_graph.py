@@ -13,6 +13,7 @@ Memory:
 from datetime import datetime, timezone
 from langgraph.graph import StateGraph, START, END
 
+from core.config import settings
 from core.logging import get_logger, log_event
 from pipeline.state import AgentState
 from pipeline.prompts.qa import get_qa_prompt
@@ -191,7 +192,11 @@ def qa_retrieve_context_node(state: AgentState) -> dict:
     print(f"  [QA] Persisted chunk count for conv_id {conv_id}: {chunk_count}")
 
     if chunk_count > 0:
-        context, chunks = retrieve_context(conversation_id=conv_id, query=retrieval_query, top_k=5)
+        context, chunks = retrieve_context(
+            conversation_id=conv_id,
+            query=retrieval_query,
+            top_k=settings.QA_TOP_K,
+        )
     else:
         context, chunks = "No relevant context found.", []
         print("  [QA] No persisted chunks found for this conversation before retrieval.")
@@ -222,6 +227,7 @@ def qa_retrieve_context_node(state: AgentState) -> dict:
             "question": question,
             "retrieval_query": retrieval_query,
             "persisted_chunk_count": chunk_count,
+            "requested_top_k": settings.QA_TOP_K,
             "top_chunks": len(chunks),
             "used_fallback": len(chunks) == 0,
         },
