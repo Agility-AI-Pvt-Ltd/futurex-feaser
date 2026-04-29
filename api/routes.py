@@ -12,6 +12,8 @@ from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+logger = logging.getLogger(__name__)
+
 from api.dependencies import get_db
 from core.config import settings
 from core.scrape_usage import enforce_daily_scrape_limit
@@ -424,6 +426,10 @@ async def upload_transcript(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        import traceback
+        with open("error.log", "w") as f:
+            traceback.print_exc(file=f)
+        logger.exception("Transcript upload failed")
         raise HTTPException(
             status_code=503,
             detail="Transcript upload or indexing is temporarily unavailable.",
