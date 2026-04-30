@@ -87,10 +87,13 @@ class LectureChatSession(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String, unique=True, index=True)
+    author_id = Column(String, index=True, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     is_mentor_requested = Column(Boolean, default=False)
     memory_summary = Column(Text, default="")
+    transcript_id = Column(Integer, ForeignKey("lecture_transcript_assets.id"), nullable=True)
 
+    transcript = relationship("LectureTranscriptAsset", foreign_keys=[transcript_id])
     messages = relationship(
         "LectureMessage",
         back_populates="session",
@@ -100,6 +103,7 @@ class LectureChatSession(Base):
         "LectureTranscriptAsset",
         back_populates="session",
         cascade="all, delete-orphan",
+        foreign_keys="[LectureTranscriptAsset.session_id]"
     )
 
 
@@ -129,7 +133,7 @@ class LectureTranscriptAsset(Base):
     chunks_indexed = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    session = relationship("LectureChatSession", back_populates="transcripts")
+    session = relationship("LectureChatSession", back_populates="transcripts", foreign_keys=[session_id])
     metadata_entry = relationship(
         "LectureTranscriptMetadata",
         back_populates="transcript",

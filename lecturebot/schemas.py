@@ -20,10 +20,12 @@ class MessageOut(BaseModel):
 class ChatSessionOut(BaseModel):
     id: int
     session_id: str
+    author_id: Optional[str] = None
     created_at: datetime
     is_mentor_requested: bool
     memory_summary: Optional[str] = ""
     messages: List[MessageOut] = Field(default_factory=list)
+    transcript: Optional[TranscriptAssetOut] = None
 
     class Config:
         from_attributes = True
@@ -33,6 +35,7 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     transcript_id: Optional[int] = None
+    author_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
