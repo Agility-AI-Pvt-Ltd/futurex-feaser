@@ -96,7 +96,7 @@ def _commit_or_500(db: Session, action: str) -> None:
         ) from exc
 
 
-def _get_or_create_lecture_session(db: Session, session_id: str) -> LectureChatSession:
+def _get_or_create_lecture_session(db: Session, session_id: str, author_id: Optional[str] = None, transcript_id: Optional[int] = None) -> LectureChatSession:
     try:
         session = db.query(LectureChatSession).filter_by(session_id=session_id).first()
     except SQLAlchemyError as exc:
@@ -106,10 +106,21 @@ def _get_or_create_lecture_session(db: Session, session_id: str) -> LectureChatS
         ) from exc
 
     if session:
+        changed = False
+        if author_id and not session.author_id:
+            session.author_id = author_id
+            changed = True
+        if transcript_id and not session.transcript_id:
+            session.transcript_id = transcript_id
+            changed = True
+        if changed:
+            _commit_or_500(db, "update lecture chat session")
         return session
 
     session = LectureChatSession(
         session_id=session_id,
+        author_id=author_id,
+        transcript_id=transcript_id,
         is_mentor_requested=False,
         memory_summary="",
     )
@@ -299,7 +310,7 @@ def _handle_lecture_chat(
     if not request_data.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-    session = _get_or_create_lecture_session(db, request_data.session_id)
+    session = _get_or_create_lecture_session(db, request_data.session_id, request_data.author_id, request_data.transcript_id)
     transcript = None
     if request_data.transcript_id is not None:
         try:
@@ -638,9 +649,12 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
 
 
 @router.get("/sessions", response_model=list[LectureChatSessionOut], tags=["History"])
-def list_sessions(db: Session = Depends(get_db)):
+def list_sessions(author_id: Optional[str] = None, db: Session = Depends(get_db)):
     try:
-        return db.query(LectureChatSession).order_by(LectureChatSession.created_at.desc()).all()
+        query = db.query(LectureChatSession)
+        if author_id:
+            query = query.filter(LectureChatSession.author_id == author_id)
+        return query.order_by(LectureChatSession.created_at.desc()).all()
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=500,
