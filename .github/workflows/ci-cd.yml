@@ -2,9 +2,9 @@ name: Backend CI/CD (Docker)
 
 on:
   push:
-    branches: ["main","dev"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -39,68 +39,6 @@ jobs:
           docker stop test-container || true
           docker rm test-container || true
 
-  deploy-dev:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-  
-    steps:
-      - name: Deploy to Staging EC2 via SSH (Docker)
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          command_timeout: 30m
-          request_pty: true
-          debug: true
-          script: |
-            set -euo pipefail
-  
-            APP_DIR="/home/${{ secrets.STAGING_USER }}/futurex-feaser"
-            ENV_FILE="$APP_DIR/.env"
-  
-            if [ ! -d "$APP_DIR/.git" ]; then
-              git clone https://github.com/Agility-AI-Pvt-Ltd/futurex-feaser.git "$APP_DIR"
-            fi
-  
-            cd "$APP_DIR"
-  
-            git fetch origin
-            git reset --hard origin/dev
-  
-            docker stop futurex-staging || true
-            docker rm futurex-staging || true
-  
-            docker rmi futurex-app || true
-  
-            docker build -t futurex-app .
-  
-            if [ ! -f "$ENV_FILE" ]; then
-              echo "Missing env file: $ENV_FILE"
-              exit 1
-            fi
-  
-            docker run -d \
-              --name futurex-staging \
-              -p 7861:7860 \
-              --env-file "$ENV_FILE" \
-              --restart always \
-              futurex-app
-  
-            docker ps
-  
-            # health check
-            for i in $(seq 1 30); do
-              if curl -fsS http://127.0.0.1:7860/ >/dev/null; then
-                echo "Staging health check passed."
-                exit 0
-              fi
-              sleep 2
-            done
-  
-            docker logs --tail 100 futurex-staging || true
-            exit 1
   deploy:
     runs-on: ubuntu-latest
     needs: build
