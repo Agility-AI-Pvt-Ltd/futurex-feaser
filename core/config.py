@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     LLM_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60)
 
     # ── Scrape Rate Limiting ─────────────────────────────────────────────────
-    SCRAPE_DAILY_LIMIT: int = Field(default=2)
+    SCRAPE_DAILY_LIMIT: int = Field(default=6)
     SCRAPE_RUN_LOG_DIR: str = Field(default="scrape_run_logs")
 
     # ── Noise Remover ────────────────────────────────────────────────────────
