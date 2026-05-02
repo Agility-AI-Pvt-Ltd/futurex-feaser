@@ -8,6 +8,7 @@ Add new tools here and wire them into graph.py.
 import asyncio
 import json
 import re
+from core.config import settings
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
 from pipeline.prompts.cross_question import get_cross_question_prompt
@@ -125,6 +126,12 @@ def chat_filter_node(state: AgentState) -> dict:
     meaningless idea inputs.
     """
     print("--- NODE EXECUTING: chat_filter_node ---")
+    if not settings.FEASIBILITY_CHAT_FILTER_ENABLED:
+        return {
+            "input_valid": True,
+            "validation_message": "",
+        }
+
     is_valid, message = _validate_chat_input(state)
     return {
         "input_valid": is_valid,
@@ -392,3 +399,54 @@ def llm_agent_node(state: AgentState) -> dict:
     )
     response = llm.invoke(prompt)
     return {"analysis": response.content}
+
+
+def engagement_question_node(state: AgentState) -> dict:
+    """
+    Generates one engagement-driving follow-up question from the completed
+    feasibility report so the conversation naturally continues.
+    """
+    print("--- NODE EXECUTING: engagement_question_node ---")
+    raw_analysis = (state.get("analysis") or "").strip()
+    if not raw_analysis:
+        return {"engagement_question": ""}
+
+    try:
+        report = json.loads(raw_analysis.replace("```json", "").replace("```", "").strip())
+    except Exception:
+        return {"engagement_question": ""}
+
+    if not isinstance(report, dict):
+        return {"engagement_question": ""}
+
+    from core.llm_factory import get_llm
+    llm = get_llm(temperature=0.4)
+
+    prompt = (
+        "You are helping continue a startup feasibility conversation after a report was generated.\n"
+        "Based on the report fields below, ask EXACTLY ONE sharp, engaging follow-up question.\n"
+        "The question should make the founder think and reply with useful specifics.\n\n"
+        "Rules:\n"
+        "- Ask only one question.\n"
+        "- Keep it under 30 words.\n"
+        "- Make it conversational, not robotic.\n"
+        "- Use the score and report insights to choose the most important next discussion point.\n"
+        "- If score is low, focus on the biggest risk or missing proof.\n"
+        "- If score is medium, focus on differentiation, validation, or wedge.\n"
+        "- If score is high, focus on execution priority, beachhead users, or defensibility.\n"
+        "- Return only the question text, with no bullets, labels, or markdown.\n\n"
+        f"Startup idea: {state.get('idea', '')}\n"
+        f"Score: {report.get('score', '')}\n"
+        f"Idea Fit: {report.get('idea_fit', '')}\n"
+        f"Competitors: {report.get('competitors', '')}\n"
+        f"Opportunity: {report.get('opportunity', '')}\n"
+        f"Targeting: {report.get('targeting', '')}\n"
+        f"Next Step: {report.get('next_step', '')}\n"
+    )
+
+    try:
+        question = (llm.invoke(prompt).content or "").strip()
+    except Exception:
+        question = ""
+
+    return {"engagement_question": question}

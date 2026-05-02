@@ -99,7 +99,8 @@ This endpoint is used for both:
 {
   "response": "Researching your idea...",
   "conversation_id": "46bf4e97-cd77-414d-a34f-066f677fdc71",
-  "analysis": "What specific user behavior or signal would the system use to identify someone at risk?"
+  "analysis": "What specific user behavior or signal would the system use to identify someone at risk?",
+  "engagement_question": null
 }
 ```
 
@@ -110,6 +111,7 @@ This endpoint is used for both:
 | `response` | string | Status-like message. Usually `"Researching your idea..."` for the first turn and `"Analysis Complete"` for the second turn. |
 | `conversation_id` | string | Persist this in frontend state immediately. |
 | `analysis` | string or null | On first turn this is typically the clarifying question. On second turn this is the final feasibility report JSON as a string. |
+| `engagement_question` | string or null | After the final report is generated, backend may return one extra follow-up question based on the report fields to encourage continued engagement. |
 
 ## Important `/api/chat` Behavior
 

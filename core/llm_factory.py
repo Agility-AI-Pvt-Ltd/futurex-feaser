@@ -1,7 +1,7 @@
 from langchain_openai import ChatOpenAI
 from core.config import settings
 
-def get_llm(model: str = "gpt-4o-mini", temperature: float = 0.7) -> ChatOpenAI:
+def get_llm(model: str = "gpt-5.4-mini", temperature: float = 0.7) -> ChatOpenAI:
     """
     Factory function to initialize and return the language model.
     """
