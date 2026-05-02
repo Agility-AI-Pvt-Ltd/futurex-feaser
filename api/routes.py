@@ -48,6 +48,10 @@ from models import (
 )
 from pipeline.graph import app as langgraph_app
 from pipeline.qa_graph import get_qa_graph_mermaid, qa_app as qa_langgraph_app
+from pipeline.tools import (
+    generate_engagement_question_from_analysis,
+    generate_engagement_reply_from_analysis,
+)
 
 try:
     from rag.embedder import embed_conversation_context
@@ -84,6 +88,16 @@ class QaResponse(BaseModel):
     answer: str
     top_chunks: Optional[list[dict]] = None
     trace: Optional[list[dict]] = None
+
+
+class EngagementReplyInput(BaseModel):
+    conversation_id: str
+    answer: str
+    engagement_question: Optional[str] = None
+
+
+class EngagementReplyResponse(BaseModel):
+    answer: str
 
 
 def _commit_or_500(db: Session, action: str) -> None:
@@ -215,6 +229,14 @@ async def _handle_feasibility_chat(
     if not is_new_chat and conv_id:
         for session in existing_messages:
             history_dicts.append({"user": session.human_message, "ai": session.ai_message})
+
+    logging.info(
+        "[Feasibility Context] conv=%s loaded_history_turns=%s first_ts=%s last_ts=%s",
+        conv_id,
+        len(existing_messages),
+        existing_messages[0].timestamp.isoformat() if existing_messages else None,
+        existing_messages[-1].timestamp.isoformat() if existing_messages else None,
+    )
 
     initial_state = {
         "idea": original_idea,
@@ -578,6 +600,66 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
     return QaResponse(answer=answer, top_chunks=chunks, trace=trace)
 
 
+@router.post("/engagement-reply", response_model=EngagementReplyResponse)
+async def engagement_reply_endpoint(
+    input_data: EngagementReplyInput,
+    db: Session = Depends(get_db),
+):
+    conv_id = input_data.conversation_id
+    founder_answer = (input_data.answer or "").strip()
+    engagement_question = (input_data.engagement_question or "").strip()
+
+    if not founder_answer:
+        raise HTTPException(status_code=400, detail="Answer cannot be empty.")
+
+    sessions = _load_feasibility_conversation_messages(db, conv_id)
+    if not sessions:
+        return EngagementReplyResponse(answer="Could not find chat history for this conversation.")
+
+    state_model = (
+        db.query(AgentStateModel)
+        .filter(AgentStateModel.conversation_id == conv_id)
+        .first()
+    )
+    if not state_model or not (state_model.analysis or "").strip():
+        return EngagementReplyResponse(
+            answer="Could not find a feasibility report for this conversation."
+        )
+
+    first_session = sessions[0]
+    derived_question = engagement_question or generate_engagement_question_from_analysis(
+        first_session.idea or "your startup idea",
+        state_model.analysis or "",
+    )
+
+    reply = generate_engagement_reply_from_analysis(
+        idea=first_session.idea or "your startup idea",
+        raw_analysis=state_model.analysis or "",
+        engagement_question=derived_question,
+        founder_answer=founder_answer,
+    )
+    if not reply:
+        reply = (
+            "Thanks for sharing that answer. Based on the current feasibility report, "
+            "the next step is to sharpen your target user, stress-test the strongest competitor angle, "
+            "and validate whether this moment is painful enough that people would come back daily."
+        )
+
+    full_qa_history: list[dict] = list(state_model.qa_history or [])
+    full_qa_history.append(
+        {
+            "kind": "engagement",
+            "engagement_question": derived_question,
+            "q": founder_answer,
+            "a": reply,
+        }
+    )
+    state_model.qa_history = full_qa_history
+    db.commit()
+
+    return EngagementReplyResponse(answer=reply)
+
+
 @router.get("/history")
 async def get_history(
     author_id: Optional[str] = None,
@@ -669,6 +751,10 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
         "ideal_customer": first_session.ideal_customer,
         "problem_solved": first_session.what_problem_it_solves,
         "analysis": state_model.analysis,
+        "engagement_question": generate_engagement_question_from_analysis(
+            first_session.idea or "",
+            state_model.analysis or "",
+        ),
         "qa_history": state_model.qa_history or [],
         "messages": [
             {
