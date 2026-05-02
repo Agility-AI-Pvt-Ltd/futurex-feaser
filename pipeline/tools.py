@@ -401,23 +401,18 @@ def llm_agent_node(state: AgentState) -> dict:
     return {"analysis": response.content}
 
 
-def engagement_question_node(state: AgentState) -> dict:
-    """
-    Generates one engagement-driving follow-up question from the completed
-    feasibility report so the conversation naturally continues.
-    """
-    print("--- NODE EXECUTING: engagement_question_node ---")
-    raw_analysis = (state.get("analysis") or "").strip()
-    if not raw_analysis:
-        return {"engagement_question": ""}
+def generate_engagement_question_from_analysis(idea: str, raw_analysis: str) -> str:
+    cleaned_analysis = (raw_analysis or "").strip()
+    if not cleaned_analysis:
+        return ""
 
     try:
-        report = json.loads(raw_analysis.replace("```json", "").replace("```", "").strip())
+        report = json.loads(cleaned_analysis.replace("```json", "").replace("```", "").strip())
     except Exception:
-        return {"engagement_question": ""}
+        return ""
 
     if not isinstance(report, dict):
-        return {"engagement_question": ""}
+        return ""
 
     from core.llm_factory import get_llm
     llm = get_llm(temperature=0.4)
@@ -435,7 +430,7 @@ def engagement_question_node(state: AgentState) -> dict:
         "- If score is medium, focus on differentiation, validation, or wedge.\n"
         "- If score is high, focus on execution priority, beachhead users, or defensibility.\n"
         "- Return only the question text, with no bullets, labels, or markdown.\n\n"
-        f"Startup idea: {state.get('idea', '')}\n"
+        f"Startup idea: {idea}\n"
         f"Score: {report.get('score', '')}\n"
         f"Idea Fit: {report.get('idea_fit', '')}\n"
         f"Competitors: {report.get('competitors', '')}\n"
@@ -445,8 +440,68 @@ def engagement_question_node(state: AgentState) -> dict:
     )
 
     try:
-        question = (llm.invoke(prompt).content or "").strip()
+        return (llm.invoke(prompt).content or "").strip()
     except Exception:
-        question = ""
+        return ""
 
+
+def generate_engagement_reply_from_analysis(
+    idea: str,
+    raw_analysis: str,
+    engagement_question: str,
+    founder_answer: str,
+) -> str:
+    cleaned_analysis = (raw_analysis or "").strip()
+    founder_answer = (founder_answer or "").strip()
+    if not cleaned_analysis or not founder_answer:
+        return ""
+
+    try:
+        report = json.loads(cleaned_analysis.replace("```json", "").replace("```", "").strip())
+    except Exception:
+        return ""
+
+    if not isinstance(report, dict):
+        return ""
+
+    from core.llm_factory import get_llm
+    llm = get_llm(temperature=0.4)
+
+    prompt = (
+        "You are a startup advisor continuing a feasibility conversation.\n"
+        "A founder has answered an engagement question after receiving a feasibility report.\n"
+        "Reply directly to the founder using ONLY the report fields below and their answer.\n\n"
+        "Your job:\n"
+        "- Acknowledge their answer briefly.\n"
+        "- Interpret it through the report's score, idea fit, competitors, opportunity, targeting, and next step.\n"
+        "- Give practical feedback in 3 short paragraphs or bullet-style sections.\n"
+        "- End with one concise sentence that naturally invites the founder to continue.\n"
+        "- Do not ask a brand-new follow-up question here.\n\n"
+        f"Startup idea: {idea}\n"
+        f"Original engagement question: {engagement_question}\n"
+        f"Founder answer: {founder_answer}\n\n"
+        f"Score: {report.get('score', '')}\n"
+        f"Idea Fit: {report.get('idea_fit', '')}\n"
+        f"Competitors: {report.get('competitors', '')}\n"
+        f"Opportunity: {report.get('opportunity', '')}\n"
+        f"Targeting: {report.get('targeting', '')}\n"
+        f"Next Step: {report.get('next_step', '')}\n"
+    )
+
+    try:
+        return (llm.invoke(prompt).content or "").strip()
+    except Exception:
+        return ""
+
+
+def engagement_question_node(state: AgentState) -> dict:
+    """
+    Generates one engagement-driving follow-up question from the completed
+    feasibility report so the conversation naturally continues.
+    """
+    print("--- NODE EXECUTING: engagement_question_node ---")
+    question = generate_engagement_question_from_analysis(
+        state.get("idea", ""),
+        state.get("analysis", "") or "",
+    )
     return {"engagement_question": question}
