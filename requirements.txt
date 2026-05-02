@@ -19,6 +19,8 @@ streamlit
 beautifulsoup4
 ddgs
 crawl4ai
+trafilatura
+openai
 numpy<2
 praw
 qdrant-client
