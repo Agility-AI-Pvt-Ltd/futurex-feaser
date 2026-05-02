@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # ── OpenAI ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = Field(default="")
     OPENAI_MODEL_NAME: str = Field(default="gpt-4o-mini")
+    OPENROUTER_API_KEY: str = Field(default="")
+    OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
+    OPENROUTER_MODEL_NAME: str = Field(default="meta-llama/llama-3-70b-instruct")
+    OPENROUTER_LLM_CLEANER_ENABLED: bool = Field(default=False)
+    OPENROUTER_LLM_CLEANER_MAX_CHARS: int = Field(default=3000)
+    OPENROUTER_LLM_CLEANER_TIMEOUT_SECONDS: int = Field(default=8)
+    OPENROUTER_LLM_CLEANER_MAX_SOURCES: int = Field(default=2)
 
     # ── Legacy LLM Rate Limiting ─────────────────────────────────────────────
     LLM_RATE_LIMIT_REQUESTS: int = Field(default=10)
@@ -44,6 +51,7 @@ class Settings(BaseSettings):
     # ── Scrape Rate Limiting ─────────────────────────────────────────────────
     SCRAPE_DAILY_LIMIT: int = Field(default=6)
     SCRAPE_RUN_LOG_DIR: str = Field(default="scrape_run_logs")
+    SCRAPED_LOGX_DIR: str = Field(default="scraped_logx")
     FEASIBILITY_CHAT_FILTER_ENABLED: bool = Field(default=True)
     CRAWLER_URL_TIMEOUT_SECONDS: int = Field(default=20)
 
@@ -94,6 +102,13 @@ class Settings(BaseSettings):
     @property
     def scrape_run_log_dir(self) -> str:
         raw_path = Path(self.SCRAPE_RUN_LOG_DIR).expanduser()
+        if raw_path.is_absolute():
+            return str(raw_path)
+        return str((BASE_DIR / raw_path).resolve())
+
+    @property
+    def scraped_logx_dir(self) -> str:
+        raw_path = Path(self.SCRAPED_LOGX_DIR).expanduser()
         if raw_path.is_absolute():
             return str(raw_path)
         return str((BASE_DIR / raw_path).resolve())
