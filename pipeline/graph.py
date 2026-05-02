@@ -21,6 +21,7 @@ from pipeline.state import AgentState
 from pipeline.tools import (
     chat_filter_node,
     cross_question_node,
+    engagement_question_node,
     idea_vagueness_filter_node,
     invalid_chat_response_node,
     load_context_node,
@@ -66,6 +67,7 @@ workflow.add_node("invalid_chat_response",invalid_chat_response_node)
 workflow.add_node("modify_query",         modify_query_node)
 workflow.add_node("web_research",         web_research_node)
 workflow.add_node("analyzer",             llm_agent_node)
+workflow.add_node("engagement_question",  engagement_question_node)
 
 # Add Edges
 workflow.add_edge(START, "load_context")
@@ -97,6 +99,7 @@ workflow.add_edge("invalid_chat_response", END)
 
 workflow.add_edge("modify_query",  "web_research")
 workflow.add_edge("web_research",  "analyzer")
-workflow.add_edge("analyzer",      END)
+workflow.add_edge("analyzer",      "engagement_question")
+workflow.add_edge("engagement_question", END)
 
 app = workflow.compile()
