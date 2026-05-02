@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     REDDIT_CLIENT_ID: str = Field(default="")
     REDDIT_CLIENT_SECRET: str = Field(default="")
     REDDIT_USER_AGENT: str = Field(default="futurex-feaser/1.0")
+    REDDIT_PRAW_TIMEOUT_SECONDS: int = Field(default=8)
+    REDDIT_SKIP_CRAWLER_FALLBACK: bool = Field(default=False)
 
     # ── OpenAI ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = Field(default="")
@@ -42,6 +44,8 @@ class Settings(BaseSettings):
     # ── Scrape Rate Limiting ─────────────────────────────────────────────────
     SCRAPE_DAILY_LIMIT: int = Field(default=6)
     SCRAPE_RUN_LOG_DIR: str = Field(default="scrape_run_logs")
+    FEASIBILITY_CHAT_FILTER_ENABLED: bool = Field(default=True)
+    CRAWLER_URL_TIMEOUT_SECONDS: int = Field(default=20)
 
     # ── Noise Remover ────────────────────────────────────────────────────────
     NOISE_REMOVER_ENABLED: bool = Field(default=False)
