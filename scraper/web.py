@@ -260,7 +260,10 @@ def _fetch_reddit_submission_text(url: str) -> tuple[str, dict[str, Any]]:
 
 
 async def _fetch_reddit_submission_text_async(url: str) -> tuple[str, dict[str, Any]]:
-    return await asyncio.to_thread(_fetch_reddit_submission_text, url)
+    return await asyncio.wait_for(
+        asyncio.to_thread(_fetch_reddit_submission_text, url),
+        timeout=max(settings.REDDIT_PRAW_TIMEOUT_SECONDS, 1),
+    )
 
 
 def _apply_noise_remover(content_items: list[dict], seed_texts: list[str] | None) -> list[dict]:
@@ -406,6 +409,17 @@ async def crawler_service_with_logging(
                             run_logger.write("REDDIT_EXTRACTION_METHOD: praw_failed_fallback_to_crawler")
                             run_logger.write(f"error: {reddit_exc}")
                             run_logger.write("")
+                        if settings.REDDIT_SKIP_CRAWLER_FALLBACK:
+                            logging.warning(
+                                "Skipping Reddit URL after PRAW failure because REDDIT_SKIP_CRAWLER_FALLBACK is enabled: %s",
+                                url,
+                            )
+                            if run_logger:
+                                run_logger.write("STATUS: skipped_after_praw_failure")
+                                run_logger.write("")
+                            print(f"[REDDIT] Skipped after PRAW failure: {url}")
+                            print("-" * 80)
+                            continue
                         log_event(
                             event_logger,
                             "reddit_api_fallback",
@@ -417,7 +431,10 @@ async def crawler_service_with_logging(
                             status="fallback_started",
                         )
 
-                result = await crawler.arun(url=url)
+                result = await asyncio.wait_for(
+                    crawler.arun(url=url),
+                    timeout=max(settings.CRAWLER_URL_TIMEOUT_SECONDS, 1),
+                )
 
                 markdown = result.markdown or ""
                 if run_logger:

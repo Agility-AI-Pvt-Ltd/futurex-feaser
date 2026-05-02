@@ -71,6 +71,7 @@ class FeasibilityChatResponse(BaseModel):
     response: str
     conversation_id: str
     analysis: Optional[str] = None
+    engagement_question: Optional[str] = None
     is_vague: bool = False
 
 
@@ -147,6 +148,24 @@ def _load_lecture_history(db: Session, session_id: str) -> list[dict]:
     return [{"role": message.role, "content": message.content} for message in messages]
 
 
+def _load_feasibility_conversation_messages(db: Session, conversation_id: str) -> list[ChatSession]:
+    if not conversation_id:
+        return []
+
+    try:
+        return (
+            db.query(ChatSession)
+            .filter(ChatSession.conversation_id == conversation_id)
+            .order_by(ChatSession.timestamp.asc())
+            .all()
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while loading conversation history.",
+        ) from exc
+
+
 def _is_lecture_chat_payload(payload: dict[str, Any]) -> bool:
     return "session_id" in payload and "message" in payload
 
@@ -166,13 +185,10 @@ async def _handle_feasibility_chat(
     effective_author_id = input_data.authorId
 
     initial_analysis = ""
+    existing_messages: list[ChatSession] = []
     if conv_id:
-        existing = (
-            db.query(ChatSession)
-            .filter(ChatSession.conversation_id == conv_id)
-            .order_by(ChatSession.timestamp.asc())
-            .first()
-        )
+        existing_messages = _load_feasibility_conversation_messages(db, conv_id)
+        existing = existing_messages[0] if existing_messages else None
         state_model = (
             db.query(AgentStateModel)
             .filter(AgentStateModel.conversation_id == conv_id)
@@ -187,7 +203,7 @@ async def _handle_feasibility_chat(
             effective_author_id = existing.authorId or effective_author_id
             current_message = input_data.idea
 
-        if state_model:
+        if state_model and existing:
             initial_analysis = state_model.analysis or ""
     else:
         conv_id = str(uuid.uuid4())
@@ -197,13 +213,7 @@ async def _handle_feasibility_chat(
 
     history_dicts = []
     if not is_new_chat and conv_id:
-        sessions = (
-            db.query(ChatSession)
-            .filter(ChatSession.conversation_id == conv_id)
-            .order_by(ChatSession.timestamp.asc())
-            .all()
-        )
-        for session in sessions:
+        for session in existing_messages:
             history_dicts.append({"user": session.human_message, "ai": session.ai_message})
 
     initial_state = {
@@ -234,6 +244,7 @@ async def _handle_feasibility_chat(
             response=vague_msg,
             conversation_id=conv_id,
             analysis=vague_msg,
+            engagement_question=None,
             is_vague=True,
         )
 
@@ -300,6 +311,7 @@ async def _handle_feasibility_chat(
         response="Analysis Complete" if not is_new_chat else "Researching your idea...",
         conversation_id=conv_id,
         analysis=result.get("analysis"),
+        engagement_question=result.get("engagement_question"),
     )
 
 
@@ -507,12 +519,7 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
     if not state_model:
         return QaResponse(answer="Could not find a feasibility report for this idea.")
 
-    sessions = (
-        db.query(ChatSession)
-        .filter(ChatSession.conversation_id == conv_id)
-        .order_by(ChatSession.timestamp.asc())
-        .all()
-    )
+    sessions = _load_feasibility_conversation_messages(db, conv_id)
     history_dicts = [{"user": session.human_message, "ai": session.ai_message} for session in sessions]
     full_qa_history: list[dict] = state_model.qa_history or []
     qa_summary: str = state_model.qa_summary or ""
@@ -572,7 +579,29 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
 
 
 @router.get("/history")
-async def get_history(author_id: Optional[str] = None, db: Session = Depends(get_db)):
+async def get_history(
+    author_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    if conversation_id:
+        query = db.query(ChatSession).filter(ChatSession.conversation_id == conversation_id)
+        if author_id:
+            query = query.filter(ChatSession.authorId == author_id)
+
+        session = query.order_by(ChatSession.timestamp.asc()).first()
+        if not session:
+            return []
+
+        return [
+            {
+                "conversation_id": session.conversation_id,
+                "idea": session.idea,
+                "timestamp": session.timestamp,
+                "user_name": session.user_name,
+            }
+        ]
+
     if not author_id:
         return []
 
@@ -628,12 +657,8 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
         .filter(AgentStateModel.conversation_id == identifier)
         .first()
     )
-    first_session = (
-        db.query(ChatSession)
-        .filter(ChatSession.conversation_id == identifier)
-        .order_by(ChatSession.timestamp.asc())
-        .first()
-    )
+    conversation_sessions = _load_feasibility_conversation_messages(db, identifier)
+    first_session = conversation_sessions[0] if conversation_sessions else None
     if not state_model or not first_session:
         return {"error": "Conversation not found"}
 
@@ -645,6 +670,14 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
         "problem_solved": first_session.what_problem_it_solves,
         "analysis": state_model.analysis,
         "qa_history": state_model.qa_history or [],
+        "messages": [
+            {
+                "human_message": session.human_message,
+                "ai_message": session.ai_message,
+                "timestamp": session.timestamp,
+            }
+            for session in conversation_sessions
+        ],
     }
 
 
