@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     LECTURE_TRANSCRIPT_STORAGE_PATH: str = Field(default="transcripts_data")
     LECTURE_QDRANT_COLLECTION_NAME: str = Field(default="lecture_transcripts")
     LECTURE_QDRANT_PATH: str = Field(default="lecture_qdrant")
-    LECTURE_EMBEDDING_MODEL: str = Field(default="all-MiniLM-L6-v2")
+    LECTURE_EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
     LECTURE_VECTOR_SIZE: int = Field(default=384)
 
     @property
