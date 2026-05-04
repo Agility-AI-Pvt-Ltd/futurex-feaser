@@ -40,10 +40,10 @@ def _preload_runtime_models() -> None:
     if settings.NOISE_REMOVER_ENABLED:
         print(f"Preloading noise-remover model: {settings.NOISE_REMOVER_MODEL}")
         try:
-            from noiseremover.chunk_filter import preload_sentence_transformer_model
+            from noiseremover.chunk_filter import preload_text_embedding_model
 
-            preload_sentence_transformer_model(settings.NOISE_REMOVER_MODEL)
-            print("Noise-remover SentenceTransformer model loaded.")
+            preload_text_embedding_model(settings.NOISE_REMOVER_MODEL)
+            print("Noise-remover FastEmbed model loaded.")
         except Exception as e:
             print(f"Noise-remover preload error: {e}")
 
