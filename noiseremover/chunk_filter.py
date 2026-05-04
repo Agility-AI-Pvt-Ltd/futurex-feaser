@@ -8,12 +8,11 @@ import numpy as np
 
 @lru_cache(maxsize=4)
 def _get_sentence_transformer(model_name: str):
-    from sentence_transformers import SentenceTransformer
+    from fastembed import TextEmbedding
 
-    return SentenceTransformer(model_name)
+    return TextEmbedding(model_name=model_name)
 
-
-def preload_sentence_transformer_model(model_name: str) -> None:
+def preload_text_embedding_model(model_name: str) -> None:
     _get_sentence_transformer(model_name)
 
 
@@ -32,7 +31,7 @@ class ChunkFilter:
         if not usable_seed_texts:
             raise ValueError("seed_texts must contain at least one non-empty string")
 
-        embeddings = self.model.encode(usable_seed_texts, show_progress_bar=False)
+        embeddings = list(self.model.embed(usable_seed_texts))
         self.seed_embedding = np.mean(embeddings, axis=0)
 
     def _cosine_sim(self, a: np.ndarray, b: np.ndarray) -> float:
@@ -49,7 +48,7 @@ class ChunkFilter:
         if not usable_texts:
             return []
 
-        embeddings = self.model.encode(usable_texts, show_progress_bar=show_progress_bar)
+        embeddings = list(self.model.embed(usable_texts))
         return [
             (text, self._cosine_sim(emb, self.seed_embedding))
             for text, emb in zip(usable_texts, embeddings)
