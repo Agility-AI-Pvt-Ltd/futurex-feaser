@@ -40,7 +40,7 @@ def _init_qdrant(load_embedder: bool = True):
 
             # BGE small is lightweight and keeps the vector size aligned with
             # the 384-dim Qdrant collection.
-            embedder = TextEmbedding(model_name=EMBEDDING_MODEL_NAME)
+            embedder = TextEmbedding(model_name=EMBEDDING_MODEL_NAME, providers=["CPUExecutionProvider"])
         except Exception as e:
             logger.error(f"Failed to initialize fastembed: {e}")
             raise
