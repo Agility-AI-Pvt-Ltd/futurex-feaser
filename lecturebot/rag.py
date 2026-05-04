@@ -13,22 +13,22 @@ from qdrant_client.models import (
     PointStruct,
     VectorParams,
 )
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 from core.config import settings
 from core.logging import get_logger, truncate_for_log
 
 
 client_qdrant: QdrantClient | None = None
-embedding_model: SentenceTransformer | None = None
+embedding_model: TextEmbedding | None = None
 logger = get_logger(__name__)
 
 
-def get_embedding_model() -> SentenceTransformer:
+def get_embedding_model() -> TextEmbedding:
     global embedding_model
     if embedding_model is None:
         logger.info("embedding_model.load name=%s", settings.LECTURE_EMBEDDING_MODEL)
-        embedding_model = SentenceTransformer(settings.LECTURE_EMBEDDING_MODEL)
+        embedding_model = TextEmbedding(model_name=settings.LECTURE_EMBEDDING_MODEL)
     return embedding_model
 
 
@@ -81,11 +81,7 @@ def ensure_collection() -> None:
 
 
 def embed_text(text: str) -> List[float]:
-    return get_embedding_model().encode(
-        text,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    ).tolist()
+    return next(get_embedding_model().embed([text])).tolist()
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:

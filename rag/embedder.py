@@ -31,7 +31,7 @@ def _init_qdrant(load_embedder: bool = True):
                     vectors_config=VectorParams(size=384, distance=Distance.COSINE),
                 )
         except ImportError as e:
-            logger.error(f"Failed to initialize Qdrant/SentenceTransformers. Please install requirements: {e}")
+            logger.error(f"Failed to initialize Qdrant. Please install requirements: {e}")
             raise
 
     if load_embedder and embedder is None:
