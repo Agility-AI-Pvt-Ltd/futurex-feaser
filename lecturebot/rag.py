@@ -28,7 +28,7 @@ def get_embedding_model() -> TextEmbedding:
     global embedding_model
     if embedding_model is None:
         logger.info("embedding_model.load name=%s", settings.LECTURE_EMBEDDING_MODEL)
-        embedding_model = TextEmbedding(model_name=settings.LECTURE_EMBEDDING_MODEL)
+        embedding_model = TextEmbedding(model_name=settings.LECTURE_EMBEDDING_MODEL, providers=["CPUExecutionProvider"])
     return embedding_model
 
 

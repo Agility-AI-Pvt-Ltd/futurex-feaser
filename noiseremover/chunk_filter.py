@@ -10,7 +10,7 @@ import numpy as np
 def _get_sentence_transformer(model_name: str):
     from fastembed import TextEmbedding
 
-    return TextEmbedding(model_name=model_name)
+    return TextEmbedding(model_name=model_name, providers=["CPUExecutionProvider"])
 
 def preload_text_embedding_model(model_name: str) -> None:
     _get_sentence_transformer(model_name)
