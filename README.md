@@ -1,3 +1,12 @@
+---
+title: Futurex Feaser
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # Futurex Feaser
 
 Merged FastAPI backend for the Future X product. This repo serves two independent workflows from one unified API and database architecture:
