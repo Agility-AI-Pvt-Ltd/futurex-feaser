@@ -12,6 +12,7 @@ from ddgs import DDGS
 from crawl4ai import AsyncWebCrawler
 from core.config import settings
 from core.logging import configure_logging, get_logger, log_event, log_exception
+from core.observability import ls_traceable
 
 configure_logging()
 event_logger = get_logger(__name__)
@@ -113,6 +114,7 @@ def create_scrape_run_logger(conversation_id: str, idea: str) -> ScrapeRunLogger
     return run_logger
 
 
+@ls_traceable(run_type="tool", name="ddgs_search", tags=["scraper", "ddgs"])
 def ddgs_url_scrapper(query, run_logger: ScrapeRunLogger | None = None):
     logging.info(f"Searching DDGS for query: {query}")
     if run_logger:
@@ -765,6 +767,7 @@ async def crawler_service(urls, seed_texts=None):
     return await crawler_service_with_logging(urls, seed_texts=seed_texts, run_logger=None)
 
 
+@ls_traceable(run_type="tool", name="crawler_service_with_logging", tags=["scraper", "crawler"])
 async def crawler_service_with_logging(
     urls: list[dict[str, Any]],
     seed_texts: list[str] | None = None,

@@ -5,8 +5,8 @@ LangGraph pipeline for Q&A over an existing feasibility conversation.
 This flow reuses the shared AgentState shape used by /chat and adds QA traceability.
 
 Memory:
-  - Keeps the last QA_WINDOW_SIZE (7) turns verbatim in every prompt.
-  - When total stored turns exceed QA_SUMMARIZE_THRESHOLD (14), the oldest
+  - Keeps the last QA window size turns verbatim in every prompt.
+  - When total stored turns exceed the summarize threshold, the oldest
     turns are compressed into a rolling LLM summary so context stays bounded.
 """
 
@@ -20,11 +20,12 @@ from pipeline.state import AgentState
 from pipeline.prompts.qa import get_qa_prompt
 from rag.retriever import conversation_chunk_count, retrieve_context
 from core.llm_factory import get_llm
+from core.observability import ls_traceable
 
 
 # ── Memory constants ───────────────────────────────────────────────────────────
-QA_WINDOW_SIZE = 7          # recent turns kept verbatim in context
-QA_SUMMARIZE_THRESHOLD = 14 # compress when total history exceeds this
+QA_WINDOW_SIZE = max(1, settings.QA_WINDOW_SIZE)
+QA_SUMMARIZE_THRESHOLD = max(settings.QA_SUMMARIZE_THRESHOLD, QA_WINDOW_SIZE + 1)
 logger = get_logger(__name__)
 
 
@@ -133,6 +134,7 @@ def qa_invalid_response_node(state: AgentState) -> dict:
     }
 
 
+@ls_traceable(run_type="tool", name="qa_memory_node", tags=["qa", "node"])
 def qa_memory_node(state: AgentState, llm) -> dict:
     """
     Sliding-window memory manager for the QA chat.
@@ -204,6 +206,7 @@ def qa_memory_node(state: AgentState, llm) -> dict:
     return {"qa_history": active_window, "qa_summary": new_summary, "trace": trace}
 
 
+@ls_traceable(run_type="tool", name="qa_modify_query_node", tags=["qa", "node"])
 def qa_modify_query_node(state: AgentState, llm) -> dict:
     print("--- QA NODE: qa_modify_query_node ---")
     original_question = state.get("question", "").strip()
@@ -250,6 +253,7 @@ def qa_modify_query_node(state: AgentState, llm) -> dict:
     return {"qa_retrieval_query": rewritten, "trace": trace}
 
 
+@ls_traceable(run_type="retriever", name="qa_retrieve_context_node", tags=["qa", "retrieval"])
 def qa_retrieve_context_node(state: AgentState) -> dict:
     print("--- QA NODE: qa_retrieve_context_node ---")
     question = state.get("question", "").strip()
@@ -307,6 +311,7 @@ def qa_retrieve_context_node(state: AgentState) -> dict:
     return {"rag_context": context, "top_chunks": chunks, "trace": trace}
 
 
+@ls_traceable(run_type="tool", name="qa_generate_answer_node", tags=["qa", "node"])
 def qa_generate_answer_node(state: AgentState, llm) -> dict:
     print("--- QA NODE: qa_generate_answer_node ---")
 

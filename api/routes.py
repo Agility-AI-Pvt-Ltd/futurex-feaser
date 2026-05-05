@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 from api.dependencies import get_db
 from core.config import settings
 from core.llm_factory import get_llm
+from core.observability import ls_traceable
 from core.scrape_usage import enforce_daily_scrape_limit
-from lecturebot.rag import delete_transcript_points, index_transcript
+from lecturebot.rag import (
+    delete_collection_if_exists,
+    delete_transcript_points,
+    index_transcript,
+    reindex_transcript_with_shadow_collection,
+)
 from lecturebot.runner import run_chat_pipeline
 from lecturebot.schemas import (
     ChatRequest as LectureChatRequest,
@@ -50,8 +56,10 @@ from models import (
 from pipeline.graph import app as langgraph_app
 from pipeline.qa_graph import get_qa_graph_mermaid, qa_app as qa_langgraph_app
 from pipeline.tools import (
+    _extract_json_payload,
     generate_engagement_question_from_analysis,
     generate_engagement_reply_from_analysis,
+    run_embedding_with_retry,
 )
 
 try:
@@ -99,6 +107,19 @@ class EngagementReplyInput(BaseModel):
 
 class EngagementReplyResponse(BaseModel):
     answer: str
+
+
+def _paginate_query(query, *, limit: int, offset: int):
+    page_size = max(1, min(limit, settings.API_MAX_PAGE_SIZE))
+    page_offset = max(0, offset)
+    return query.limit(page_size).offset(page_offset)
+
+
+def _trim_qa_history(history: list[dict]) -> list[dict]:
+    max_turns = max(1, settings.QA_MAX_STORED_TURNS)
+    if len(history) <= max_turns:
+        return history
+    return history[-max_turns:]
 
 
 def _commit_or_500(db: Session, action: str) -> None:
@@ -185,6 +206,7 @@ def _is_lecture_chat_payload(payload: dict[str, Any]) -> bool:
     return "session_id" in payload and "message" in payload
 
 
+@ls_traceable(run_type="chain", name="handle_feasibility_chat", tags=["api", "feasibility"])
 async def _handle_feasibility_chat(
     input_data: IdeaInput,
     background_tasks: BackgroundTasks,
@@ -299,8 +321,7 @@ async def _handle_feasibility_chat(
     raw_analysis = result.get("analysis", "")
     if raw_analysis and not is_new_chat:
         try:
-            clean_json = raw_analysis.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_json)
+            data = json.loads(_extract_json_payload(raw_analysis))
             report = (
                 db.query(FeasibilityReport)
                 .filter(FeasibilityReport.conversation_id == conv_id)
@@ -317,14 +338,14 @@ async def _handle_feasibility_chat(
             report.score = data.get("score")
             report.targeting = data.get("targeting")
             report.next_step = data.get("next_step")
-        except JSONDecodeError:
+        except (JSONDecodeError, ValueError):
             logging.warning("LLM analysis output was not valid JSON for conversation %s", conv_id)
 
     db.commit()
 
     if not is_new_chat and embed_conversation_context is not None:
         background_tasks.add_task(
-            embed_conversation_context,
+            run_embedding_with_retry,
             conversation_id=conv_id,
             search_results="",
             analysis=state_model.analysis,
@@ -338,6 +359,7 @@ async def _handle_feasibility_chat(
     )
 
 
+@ls_traceable(run_type="chain", name="handle_lecture_chat", tags=["api", "lecturebot"])
 def _handle_lecture_chat(
     request_data: LectureChatRequest,
     db: Session,
@@ -371,6 +393,11 @@ def _handle_lecture_chat(
         transcript_source=transcript.source_name if transcript else "",
         transcript_session_name=transcript.session_name if transcript else "",
         transcript_object_path=transcript.object_path if transcript else "",
+        transcript_collection_name=(
+            transcript.metadata_entry.qdrant_collection_name
+            if transcript and transcript.metadata_entry
+            else settings.LECTURE_QDRANT_COLLECTION_NAME
+        ),
     )
 
     db.add(LectureMessage(session_id=request_data.session_id, role="user", content=request_data.message))
@@ -472,9 +499,6 @@ async def upload_transcript(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        import traceback
-        with open("error.log", "w") as f:
-            traceback.print_exc(file=f)
         logger.exception("Transcript upload failed")
         raise HTTPException(
             status_code=503,
@@ -520,6 +544,7 @@ async def chat_endpoint(
     )
 
 
+@ls_traceable(run_type="chain", name="qa_endpoint", tags=["api", "qa"])
 @router.post("/qa", response_model=QaResponse)
 async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
     conv_id = input_data.conversation_id
@@ -581,7 +606,7 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
         chunks = result.get("top_chunks", [])
         trace = result.get("trace", [])
 
-        new_full_history = full_qa_history + [{"q": question, "a": answer}]
+        new_full_history = _trim_qa_history(full_qa_history + [{"q": question, "a": answer}])
         state_model.qa_history = new_full_history
         state_model.qa_summary = result.get("qa_summary", qa_summary)
         db.commit()
@@ -601,6 +626,7 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
     return QaResponse(answer=answer, top_chunks=chunks, trace=trace)
 
 
+@ls_traceable(run_type="chain", name="engagement_reply_endpoint", tags=["api", "engagement"])
 @router.post("/engagement-reply", response_model=EngagementReplyResponse)
 async def engagement_reply_endpoint(
     input_data: EngagementReplyInput,
@@ -657,7 +683,7 @@ async def engagement_reply_endpoint(
             "a": reply,
         }
     )
-    state_model.qa_history = full_qa_history
+    state_model.qa_history = _trim_qa_history(full_qa_history)
     db.commit()
 
     return EngagementReplyResponse(answer=reply)
@@ -667,6 +693,8 @@ async def engagement_reply_endpoint(
 async def get_history(
     author_id: Optional[str] = None,
     conversation_id: Optional[str] = None,
+    limit: int = settings.API_DEFAULT_PAGE_SIZE,
+    offset: int = 0,
     db: Session = Depends(get_db),
 ):
     if conversation_id:
@@ -674,10 +702,11 @@ async def get_history(
         if author_id:
             query = query.filter(ChatSession.authorId == author_id)
 
-        session = query.order_by(ChatSession.timestamp.asc()).first()
-        if not session:
-            return []
-
+        sessions = _paginate_query(
+            query.order_by(ChatSession.timestamp.asc()),
+            limit=limit,
+            offset=offset,
+        ).all()
         return [
             {
                 "conversation_id": session.conversation_id,
@@ -685,6 +714,7 @@ async def get_history(
                 "timestamp": session.timestamp,
                 "user_name": session.user_name,
             }
+            for session in sessions
         ]
 
     if not author_id:
@@ -700,16 +730,17 @@ async def get_history(
         .subquery()
     )
 
-    sessions = (
+    sessions = _paginate_query(
         db.query(ChatSession)
         .join(
             subquery,
             (ChatSession.conversation_id == subquery.c.conversation_id)
             & (ChatSession.timestamp == subquery.c.min_ts),
         )
-        .order_by(ChatSession.timestamp.desc())
-        .all()
-    )
+        .order_by(ChatSession.timestamp.desc()),
+        limit=limit,
+        offset=offset,
+    ).all()
 
     return [
         {
@@ -772,12 +803,21 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
 
 
 @router.get("/sessions", response_model=list[LectureChatSessionOut], tags=["History"])
-def list_sessions(author_id: Optional[str] = None, db: Session = Depends(get_db)):
+def list_sessions(
+    author_id: Optional[str] = None,
+    limit: int = settings.API_DEFAULT_PAGE_SIZE,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
     try:
         query = db.query(LectureChatSession)
         if author_id:
             query = query.filter(LectureChatSession.author_id == author_id)
-        return query.order_by(LectureChatSession.created_at.desc()).all()
+        return _paginate_query(
+            query.order_by(LectureChatSession.created_at.desc()),
+            limit=limit,
+            offset=offset,
+        ).all()
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=500,
@@ -825,9 +865,17 @@ def update_transcript(transcript_id: int, payload: TranscriptUpdate, db: Session
 
 
 @router.get("/transcripts", response_model=list[LectureTranscriptAssetOut], tags=["Transcript"])
-def list_transcripts(db: Session = Depends(get_db)):
+def list_transcripts(
+    limit: int = settings.API_DEFAULT_PAGE_SIZE,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
     try:
-        return db.query(LectureTranscriptAsset).order_by(LectureTranscriptAsset.created_at.desc()).all()
+        return _paginate_query(
+            db.query(LectureTranscriptAsset).order_by(LectureTranscriptAsset.created_at.desc()),
+            limit=limit,
+            offset=offset,
+        ).all()
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=500,
@@ -863,21 +911,43 @@ def reprocess_transcript(transcript_id: int, db: Session = Depends(get_db)):
         if not cleaned_text.strip():
             raise ValueError("Transcript is empty after preprocessing.")
 
-        delete_transcript_points(
-            transcript_id=transcript.id,
-            object_path=transcript.object_path,
+        active_collection_name = (
+            transcript.metadata_entry.qdrant_collection_name
+            if transcript.metadata_entry
+            else settings.LECTURE_QDRANT_COLLECTION_NAME
         )
-        chunks_indexed = index_transcript(
-            cleaned_text,
+
+        new_collection_name, chunks_indexed = reindex_transcript_with_shadow_collection(
+            text=cleaned_text,
             source_name=transcript.source_name,
-            metadata={
-                "transcript_id": transcript.id,
-                "session_name": transcript.session_name,
-                "object_path": transcript.object_path,
-            },
+            transcript_id=transcript.id,
+            session_name=transcript.session_name,
+            object_path=transcript.object_path,
+            active_collection_name=active_collection_name,
         )
+
+        if transcript.metadata_entry:
+            transcript.metadata_entry.qdrant_collection_name = new_collection_name
+
         transcript.chunks_indexed = chunks_indexed
         _commit_or_500(db, "reprocess transcript")
+
+        if active_collection_name != new_collection_name:
+            try:
+                if active_collection_name == settings.LECTURE_QDRANT_COLLECTION_NAME:
+                    delete_transcript_points(
+                        transcript_id=transcript.id,
+                        object_path=transcript.object_path,
+                        collection_name=active_collection_name,
+                    )
+                else:
+                    delete_collection_if_exists(active_collection_name)
+            except Exception:
+                logger.exception(
+                    "lecture_rag.reprocess_cleanup_failed transcript_id=%s collection_name=%s",
+                    transcript.id,
+                    active_collection_name,
+                )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

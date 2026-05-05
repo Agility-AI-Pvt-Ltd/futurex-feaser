@@ -1,5 +1,6 @@
                                                                                                                
 fastapi
+alembic
 uvicorn
 langgraph
 langchain-google-genai
@@ -26,4 +27,3 @@ qdrant-client
 fastembed
 axiom-py
 python-multipart
-

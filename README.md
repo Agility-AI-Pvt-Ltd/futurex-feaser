@@ -134,7 +134,19 @@ AXIOM_DATASET=...
    pip install -r requirements.txt
    ```
 
-3. **Start the backend:**
+3. **Run database migrations when schema changes:**
+   ```bash
+   ./.venv/bin/python -m alembic revision -m "your change"
+   ./.venv/bin/python -m alembic upgrade head
+   ```
+   **Migrations workflow:**
+   After pulling new code, run:
+   ```bash
+   ./.venv/bin/python -m alembic upgrade head
+   ```
+   Only create a new revision when you are intentionally changing the schema.
+
+4. **Start the backend:**
    ```bash
    python app.py
    ```

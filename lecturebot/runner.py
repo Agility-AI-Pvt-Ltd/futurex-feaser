@@ -5,6 +5,7 @@ from typing import List
 
 from core.config import settings
 from core.logging import get_logger, truncate_for_log
+from core.observability import ls_traceable
 from lecturebot.graph import chat_app
 
 
@@ -15,6 +16,7 @@ FALLBACK_ANSWER = (
 )
 
 
+@ls_traceable(run_type="chain", name="run_chat_pipeline", tags=["lecturebot", "pipeline"])
 def run_chat_pipeline(
     question: str,
     history: List[dict],
@@ -23,6 +25,7 @@ def run_chat_pipeline(
     transcript_source: str = "",
     transcript_session_name: str = "",
     transcript_object_path: str = "",
+    transcript_collection_name: str = "",
 ) -> tuple[str, List[str], str]:
     trace_id = str(uuid.uuid4())
     try:
@@ -35,6 +38,7 @@ def run_chat_pipeline(
                 "transcript_source": transcript_source,
                 "transcript_session_name": transcript_session_name,
                 "transcript_object_path": transcript_object_path,
+                "transcript_collection_name": transcript_collection_name,
                 "trace_id": trace_id,
             }
         )
