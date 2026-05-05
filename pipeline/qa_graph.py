@@ -11,6 +11,7 @@ Memory:
 """
 
 from datetime import datetime, timezone
+from typing import Any
 from langgraph.graph import StateGraph, START, END
 
 from core.config import settings
@@ -39,6 +40,12 @@ def _append_trace(state: AgentState, step: str, message: str, metadata: dict | N
         }
     )
     return trace
+
+
+def _extract_llm_content(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    return getattr(response, "content", "") or ""
 
 
 def _is_low_signal_qa_question(question: str) -> bool:
@@ -126,7 +133,7 @@ def qa_invalid_response_node(state: AgentState) -> dict:
     }
 
 
-def qa_memory_node(state: AgentState) -> dict:
+def qa_memory_node(state: AgentState, llm) -> dict:
     """
     Sliding-window memory manager for the QA chat.
 
@@ -161,7 +168,6 @@ def qa_memory_node(state: AgentState) -> dict:
     active_window = qa_history[-QA_WINDOW_SIZE:]
     print(f"  [Memory] Compressing {len(to_compress)} old turn(s) into rolling summary...")
 
-    llm = get_llm(temperature=0.2)
     old_turns_str = "\n".join(
         [f"Q: {t.get('q', '')}\nA: {t.get('a', '')}" for t in to_compress]
     )
@@ -176,7 +182,7 @@ def qa_memory_node(state: AgentState) -> dict:
     )
 
     try:
-        new_summary = (llm.invoke(summary_prompt).content or "").strip()
+        new_summary = _extract_llm_content(llm.invoke(summary_prompt)).strip()
         print(f"  [Memory] Summary generated ({len(new_summary)} chars).")
     except Exception as e:
         print(f"  [Memory] Warning: Summarization failed: {e}. Keeping old summary.")
@@ -198,7 +204,7 @@ def qa_memory_node(state: AgentState) -> dict:
     return {"qa_history": active_window, "qa_summary": new_summary, "trace": trace}
 
 
-def qa_modify_query_node(state: AgentState) -> dict:
+def qa_modify_query_node(state: AgentState, llm) -> dict:
     print("--- QA NODE: qa_modify_query_node ---")
     original_question = state.get("question", "").strip()
     idea = state.get("idea", "")
@@ -213,7 +219,6 @@ def qa_modify_query_node(state: AgentState) -> dict:
         [f"User: {h.get('user', '')}\nAI: {h.get('ai', '')}" for h in history]
     )
 
-    llm = get_llm(temperature=0.2)
     rewrite_prompt = (
         "You rewrite follow-up startup questions into standalone retrieval queries.\n"
         "Use startup context to disambiguate pronouns/short phrases.\n"
@@ -229,7 +234,7 @@ def qa_modify_query_node(state: AgentState) -> dict:
     )
 
     try:
-        rewritten = (llm.invoke(rewrite_prompt).content or "").strip().strip('"')
+        rewritten = _extract_llm_content(llm.invoke(rewrite_prompt)).strip().strip('"')
     except Exception:
         rewritten = ""
 
@@ -302,7 +307,7 @@ def qa_retrieve_context_node(state: AgentState) -> dict:
     return {"rag_context": context, "top_chunks": chunks, "trace": trace}
 
 
-def qa_generate_answer_node(state: AgentState) -> dict:
+def qa_generate_answer_node(state: AgentState, llm) -> dict:
     print("--- QA NODE: qa_generate_answer_node ---")
 
     question   = state.get("question", "")
@@ -311,7 +316,6 @@ def qa_generate_answer_node(state: AgentState) -> dict:
     qa_history = state.get("qa_history", [])   # already windowed by qa_memory_node
     qa_summary = state.get("qa_summary", "")
 
-    llm = get_llm()
     prompt = get_qa_prompt(
         idea=idea,
         context=context,
@@ -326,41 +330,50 @@ def qa_generate_answer_node(state: AgentState) -> dict:
         "qa_generate_answer",
         "Generated final QA response with LLM.",
         {
-            "model_response_chars": len(response.content or ""),
+            "model_response_chars": len(_extract_llm_content(response)),
             "memory_window_turns": len(qa_history),
             "has_summary": bool(qa_summary),
         },
     )
-    return {"qa_answer": response.content, "trace": trace}
+    return {"qa_answer": _extract_llm_content(response), "trace": trace}
 
 
 # ── Graph wiring ───────────────────────────────────────────────────────────────
-qa_workflow = StateGraph(AgentState)
-qa_workflow.add_node("qa_load_state",      qa_load_state_node)
-qa_workflow.add_node("qa_filter",          qa_filter_node)
-qa_workflow.add_node("qa_invalid_response", qa_invalid_response_node)
-qa_workflow.add_node("qa_memory",          qa_memory_node)        # sliding-window + summarize
-qa_workflow.add_node("qa_modify_query",    qa_modify_query_node)
-qa_workflow.add_node("qa_retrieve_context", qa_retrieve_context_node)
-qa_workflow.add_node("qa_generate_answer", qa_generate_answer_node)
+def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None):
+    qa_workflow = StateGraph(AgentState)
 
-qa_workflow.add_edge(START,                  "qa_load_state")
-qa_workflow.add_edge("qa_load_state",        "qa_filter")
-qa_workflow.add_conditional_edges(
-    "qa_filter",
-    route_qa_filter,
-    {
-        "qa_invalid_response": "qa_invalid_response",
-        "qa_memory": "qa_memory",
-    },
-)
-qa_workflow.add_edge("qa_memory",            "qa_modify_query")
-qa_workflow.add_edge("qa_modify_query",      "qa_retrieve_context")
-qa_workflow.add_edge("qa_retrieve_context",  "qa_generate_answer")
-qa_workflow.add_edge("qa_invalid_response",  END)
-qa_workflow.add_edge("qa_generate_answer",   END)
+    memory_llm = memory_llm or get_llm(temperature=0.2)
+    rewrite_llm = rewrite_llm or get_llm(temperature=0.2)
+    answer_llm = answer_llm or get_llm()
 
-qa_app = qa_workflow.compile()
+    qa_workflow.add_node("qa_load_state", qa_load_state_node)
+    qa_workflow.add_node("qa_filter", qa_filter_node)
+    qa_workflow.add_node("qa_invalid_response", qa_invalid_response_node)
+    qa_workflow.add_node("qa_memory", lambda state: qa_memory_node(state, memory_llm))
+    qa_workflow.add_node("qa_modify_query", lambda state: qa_modify_query_node(state, rewrite_llm))
+    qa_workflow.add_node("qa_retrieve_context", qa_retrieve_context_node)
+    qa_workflow.add_node("qa_generate_answer", lambda state: qa_generate_answer_node(state, answer_llm))
+
+    qa_workflow.add_edge(START, "qa_load_state")
+    qa_workflow.add_edge("qa_load_state", "qa_filter")
+    qa_workflow.add_conditional_edges(
+        "qa_filter",
+        route_qa_filter,
+        {
+            "qa_invalid_response": "qa_invalid_response",
+            "qa_memory": "qa_memory",
+        },
+    )
+    qa_workflow.add_edge("qa_memory", "qa_modify_query")
+    qa_workflow.add_edge("qa_modify_query", "qa_retrieve_context")
+    qa_workflow.add_edge("qa_retrieve_context", "qa_generate_answer")
+    qa_workflow.add_edge("qa_invalid_response", END)
+    qa_workflow.add_edge("qa_generate_answer", END)
+
+    return qa_workflow.compile()
+
+
+qa_app = build_qa_graph()
 
 
 def get_qa_graph_mermaid() -> str:
