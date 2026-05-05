@@ -17,6 +17,7 @@ class ChatPipelineState(TypedDict):
     transcript_source: NotRequired[str]
     transcript_session_name: NotRequired[str]
     transcript_object_path: NotRequired[str]
+    transcript_collection_name: NotRequired[str]
     retrieval_query: NotRequired[str]
     context_chunks: NotRequired[List[dict]]
     context_text: NotRequired[str]

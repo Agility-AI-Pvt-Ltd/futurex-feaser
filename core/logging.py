@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 import time
 from typing import Any
 
@@ -15,14 +16,14 @@ try:
         def emit(self, record):
             try:
                 super().emit(record)
-            except Exception:
-                pass  # Swallow network exceptions to prevent crashing the main app
+            except Exception as exc:
+                print(f"Axiom emit failed: {exc}", file=sys.stderr)
         
         def flush(self):
             try:
                 super().flush()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"Axiom flush failed: {exc}", file=sys.stderr)
 
     HAS_AXIOM = True
 except ImportError:

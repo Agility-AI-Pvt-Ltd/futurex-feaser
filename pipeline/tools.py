@@ -8,8 +8,13 @@ Add new tools here and wire them into graph.py.
 import asyncio
 import json
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from core.config import settings
+from core.logging import get_logger
+from core.observability import ls_traceable
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
 from pipeline.prompts.cross_question import get_cross_question_prompt
@@ -29,12 +34,99 @@ LOW_SIGNAL_WORDS = {
     "app", "platform", "tool", "startup", "business", "service", "product",
     "idea", "something", "anything", "random", "test", "testing",
 }
+logger = get_logger(__name__)
+WEB_RESEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=10)
 
 
 def _extract_llm_content(response: Any) -> str:
     if isinstance(response, str):
         return response
     return getattr(response, "content", "") or ""
+
+
+def _extract_json_payload(raw_text: str) -> str:
+    raw_text = (raw_text or "").strip()
+    if not raw_text:
+        raise ValueError("Empty LLM response")
+
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text, re.IGNORECASE)
+    if fence_match:
+        return fence_match.group(1).strip()
+
+    start_positions = [idx for idx in (raw_text.find("{"), raw_text.find("[")) if idx != -1]
+    if not start_positions:
+        raise ValueError("No JSON payload found in LLM response")
+
+    start = min(start_positions)
+    opening = raw_text[start]
+    closing = "}" if opening == "{" else "]"
+    depth = 0
+
+    for index in range(start, len(raw_text)):
+        char = raw_text[index]
+        if char == opening:
+            depth += 1
+        elif char == closing:
+            depth -= 1
+            if depth == 0:
+                return raw_text[start : index + 1].strip()
+
+    raise ValueError("Unterminated JSON payload in LLM response")
+
+
+@ls_traceable(run_type="tool", name="embedding_retry", tags=["embedding", "background"])
+def run_embedding_with_retry(
+    conversation_id: str,
+    search_results: str,
+    analysis: str,
+    *,
+    attempts: int = 3,
+) -> None:
+    for attempt in range(1, attempts + 1):
+        try:
+            from rag.embedder import embed_conversation_context
+            embed_conversation_context(conversation_id, search_results, analysis)
+            logger.info(
+                "embedding.completed conversation_id=%s attempt=%s",
+                conversation_id,
+                attempt,
+            )
+            return
+        except Exception:
+            logger.warning(
+                "embedding.failed conversation_id=%s attempt=%s",
+                conversation_id,
+                attempt,
+                exc_info=True,
+            )
+            if attempt < attempts:
+                time.sleep(2 ** (attempt - 1))
+
+    logger.error(
+        "embedding.permanently_failed conversation_id=%s attempts=%s",
+        conversation_id,
+        attempts,
+    )
+
+
+def start_embedding_thread(conversation_id: str, search_results: str, analysis: str):
+    thread = threading.Thread(
+        target=run_embedding_with_retry,
+        args=(conversation_id, search_results, analysis),
+        name=f"embed-{conversation_id or 'unknown'}",
+    )
+    thread.start()
+    return thread
+
+
+async def _run_ddgs_search(query: str, run_logger) -> list[dict]:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        WEB_RESEARCH_EXECUTOR,
+        ddgs_url_scrapper,
+        query,
+        run_logger,
+    )
 
 
 def _tokenize_text(value: str) -> list[str]:
@@ -94,6 +186,7 @@ def _validate_chat_input(state: AgentState) -> tuple[bool, str]:
     return True, ""
 
 
+@ls_traceable(run_type="tool", name="cross_question_node", tags=["feasibility", "node"])
 def cross_question_node(state: AgentState, llm) -> dict:
     """
     Tool: Cross Question (New Chat)
@@ -144,6 +237,7 @@ def chat_filter_node(state: AgentState) -> dict:
     }
 
 
+@ls_traceable(run_type="tool", name="idea_vagueness_filter_node", tags=["feasibility", "node"])
 def idea_vagueness_filter_node(state: AgentState, llm) -> dict:
     """
     LLM-powered gatekeeper that determines whether the user's startup idea
@@ -184,9 +278,7 @@ def idea_vagueness_filter_node(state: AgentState, llm) -> dict:
     )
 
     try:
-        raw = _extract_llm_content(llm.invoke(prompt)).strip()
-        # Strip accidental markdown fences
-        raw = raw.replace("```json", "").replace("```", "").strip()
+        raw = _extract_json_payload(_extract_llm_content(llm.invoke(prompt)))
         data = json.loads(raw)
         is_vague = bool(data.get("is_vague", False))
         reason   = str(data.get("reason", ""))
@@ -231,6 +323,7 @@ def invalid_chat_response_node(state: AgentState) -> dict:
     return {"analysis": message}
 
 
+@ls_traceable(run_type="tool", name="modify_query_node", tags=["feasibility", "node"])
 def modify_query_node(state: AgentState, llm) -> dict:
 
     """
@@ -263,7 +356,7 @@ def modify_query_node(state: AgentState, llm) -> dict:
 
     # Parse the JSON array; fall back to a single query if LLM misbehaves
     try:
-        queries = json.loads(raw)
+        queries = json.loads(_extract_json_payload(raw))
         if not isinstance(queries, list) or len(queries) == 0:
             raise ValueError("Not a list")
         queries = [q.strip(' "') for q in queries[:3]]
@@ -279,6 +372,7 @@ def modify_query_node(state: AgentState, llm) -> dict:
     }
 
 
+@ls_traceable(run_type="tool", name="web_research_node", tags=["feasibility", "web-research"])
 async def web_research_node(state: AgentState) -> dict:
     """
     Tool: Web Research
@@ -320,16 +414,21 @@ async def web_research_node(state: AgentState) -> dict:
                     seen.add(item["url"])
                     all_urls.append(item)
 
-        # Run all targeted queries; apply domain-filter + cap on general results
-        for q in queries:
+        # Run blocking DDGS searches in a bounded executor so the event loop stays responsive.
+        targeted_searches = [
+            _run_ddgs_search(q, run_logger)
+            for q in queries
+        ]
+        targeted_results = await asyncio.gather(*targeted_searches)
+
+        for q, raw in zip(queries, targeted_results):
             print(f"  [Search] Query: {q}")
-            raw = ddgs_url_scrapper(q, run_logger=run_logger)
             _add_urls(filter_urls(raw, max_results=6, run_logger=run_logger))
 
         # Reddit-specific search — intentionally unfiltered (we WANT reddit.com URLs here)
         reddit_query = f"{queries[0]} site:reddit.com"
         print(f"  [Search] Reddit query: {reddit_query}")
-        _add_urls(ddgs_url_scrapper(reddit_query, run_logger=run_logger))
+        _add_urls(await _run_ddgs_search(reddit_query, run_logger))
 
         run_logger.section("DEDUPED URLS TO CRAWL")
         run_logger.write(f"count: {len(all_urls)}")
@@ -366,6 +465,7 @@ async def web_research_node(state: AgentState) -> dict:
         run_logger.close()
 
 
+@ls_traceable(run_type="tool", name="llm_agent_node", tags=["feasibility", "analysis"])
 def llm_agent_node(state: AgentState, llm) -> dict:
     """
     Tool: LLM Feasibility Analyser
@@ -377,19 +477,17 @@ def llm_agent_node(state: AgentState, llm) -> dict:
     # The LLM API call takes time (waiting on network).
     # We can perform the CPU-intensive embedding of search_results locally at the same time.
     try:
-        from rag.embedder import embed_conversation_context
-        import threading
-        
-        # Fire off the CPU-bound embedding in a background thread
         print("  [RAG] 🚀 Starting background embedding for search_results...")
-        emb_thread = threading.Thread(
-            target=embed_conversation_context,
-            args=(state.get('conversation_id', ''), state.get('search_results', ''), ""),
-            daemon=True
+        start_embedding_thread(
+            state.get("conversation_id", ""),
+            state.get("search_results", ""),
+            "",
         )
-        emb_thread.start()
-    except Exception as e:
-        print(f"  [RAG] ⚠️ Could not start background embedding: {e}")
+    except Exception:
+        logger.exception(
+            "embedding.thread_start_failed conversation_id=%s",
+            state.get("conversation_id", ""),
+        )
 
     prompt = get_feasibility_prompt(
         idea=state['idea'],
@@ -400,13 +498,14 @@ def llm_agent_node(state: AgentState, llm) -> dict:
     return {"analysis": _extract_llm_content(response)}
 
 
+@ls_traceable(run_type="chain", name="generate_engagement_question", tags=["engagement"])
 def generate_engagement_question_from_analysis(idea: str, raw_analysis: str, llm) -> str:
     cleaned_analysis = (raw_analysis or "").strip()
     if not cleaned_analysis:
         return ""
 
     try:
-        report = json.loads(cleaned_analysis.replace("```json", "").replace("```", "").strip())
+        report = json.loads(_extract_json_payload(cleaned_analysis))
     except Exception:
         return ""
 
@@ -441,6 +540,7 @@ def generate_engagement_question_from_analysis(idea: str, raw_analysis: str, llm
         return ""
 
 
+@ls_traceable(run_type="chain", name="generate_engagement_reply", tags=["engagement"])
 def generate_engagement_reply_from_analysis(
     idea: str,
     raw_analysis: str,
@@ -454,7 +554,7 @@ def generate_engagement_reply_from_analysis(
         return ""
 
     try:
-        report = json.loads(cleaned_analysis.replace("```json", "").replace("```", "").strip())
+        report = json.loads(_extract_json_payload(cleaned_analysis))
     except Exception:
         return ""
 
@@ -488,6 +588,7 @@ def generate_engagement_reply_from_analysis(
         return ""
 
 
+@ls_traceable(run_type="tool", name="engagement_question_node", tags=["engagement", "node"])
 def engagement_question_node(state: AgentState, llm) -> dict:
     """
     Generates one engagement-driving follow-up question from the completed

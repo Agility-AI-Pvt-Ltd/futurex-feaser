@@ -18,8 +18,10 @@ from core.logging import (
     serialize_http_body,
     sanitize_headers,
 )
+from core.observability import configure_langsmith, ls_tracing_context
 
 logger = configure_logging().getChild("http")
+configure_langsmith()
 
 
 def _initialize_database():
@@ -103,7 +105,16 @@ async def log_http_traffic(request: Request, call_next):
     )
 
     try:
-        response = await call_next(request)
+        with ls_tracing_context(
+            metadata={
+                "http.method": request.method,
+                "http.path": request.url.path,
+                "http.query": str(request.url.query),
+                "client_ip": request.client.host if request.client else None,
+            },
+            tags=["http", "fastapi"],
+        ):
+            response = await call_next(request)
     except Exception:
         duration_ms = round((perf_counter() - started_at) * 1000, 3)
         logger.exception(

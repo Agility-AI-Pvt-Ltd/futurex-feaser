@@ -5,6 +5,7 @@ import json
 from core.config import settings
 from core.llm_factory import get_llm
 from core.logging import get_logger, truncate_for_log
+from core.observability import ls_traceable
 from lecturebot.prompts import (
     get_memory_summary_messages,
     get_question_analysis_messages,
@@ -66,6 +67,7 @@ def _fallback_question_analysis(state: ChatPipelineState) -> dict:
     }
 
 
+@ls_traceable(run_type="tool", name="lecture_analyze_question_node", tags=["lecturebot", "node"])
 def analyze_question_node(state: ChatPipelineState) -> dict:
     trace_id = state.get("trace_id", "unknown")
     try:
@@ -90,6 +92,7 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
     return result
 
 
+@ls_traceable(run_type="retriever", name="lecture_retrieve_context_node", tags=["lecturebot", "retrieval"])
 def retrieve_context_node(state: ChatPipelineState) -> dict:
     trace_id = state.get("trace_id", "unknown")
     retrieval_query = _build_retrieval_query(state)
@@ -101,6 +104,7 @@ def retrieve_context_node(state: ChatPipelineState) -> dict:
             source_name=state.get("transcript_source", ""),
             session_name=state.get("transcript_session_name", ""),
             object_path=state.get("transcript_object_path", ""),
+            collection_name=state.get("transcript_collection_name", ""),
         )
     except Exception:
         logger.exception("lecture_rag.retrieval.error trace_id=%s", trace_id)
@@ -118,6 +122,7 @@ def retrieve_context_node(state: ChatPipelineState) -> dict:
     }
 
 
+@ls_traceable(run_type="tool", name="lecture_answer_question_node", tags=["lecturebot", "node"])
 def answer_question_node(state: ChatPipelineState) -> dict:
     trace_id = state.get("trace_id", "unknown")
     try:
@@ -147,6 +152,7 @@ def answer_question_node(state: ChatPipelineState) -> dict:
     return {"answer": answer}
 
 
+@ls_traceable(run_type="tool", name="lecture_summarize_memory_node", tags=["lecturebot", "node"])
 def summarize_memory_node(state: ChatPipelineState) -> dict:
     trace_id = state.get("trace_id", "unknown")
     history = state.get("history", [])
