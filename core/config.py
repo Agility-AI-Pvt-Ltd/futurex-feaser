@@ -66,7 +66,16 @@ class Settings(BaseSettings):
     # ── Axiom Logging ────────────────────────────────────────────────────────
     AXIOM_TOKEN: str = Field(default="")
     AXIOM_DATASET: str = Field(default="")
+    LANGSMITH_TRACING: bool = Field(default=False)
+    LANGSMITH_ENDPOINT: str = Field(default="https://api.smith.langchain.com")
+    LANGSMITH_API_KEY: str = Field(default="")
+    LANGSMITH_PROJECT: str = Field(default="default")
     QA_TOP_K: int = Field(default=5)
+    QA_WINDOW_SIZE: int = Field(default=7)
+    QA_SUMMARIZE_THRESHOLD: int = Field(default=14)
+    QA_MAX_STORED_TURNS: int = Field(default=100)
+    API_DEFAULT_PAGE_SIZE: int = Field(default=50)
+    API_MAX_PAGE_SIZE: int = Field(default=200)
     RAG_LOG_CHUNK_CHARS: int = Field(default=400)
     RAG_RUN_LOG_DIR: str = Field(default="rag_run_logs")
 

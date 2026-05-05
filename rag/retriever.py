@@ -3,6 +3,7 @@ from pathlib import Path
 
 from core.config import settings
 from core.logging import get_logger, log_event, log_exception, truncate_for_log
+from core.observability import ls_traceable
 
 logger = get_logger(__name__)
 
@@ -114,6 +115,7 @@ def _run_similarity_search(query_vector: list[float], conversation_id: str, top_
     raise AttributeError("Qdrant client does not support query_points or search")
 
 
+@ls_traceable(run_type="retriever", name="retrieve_context", tags=["rag", "retrieval"])
 def retrieve_context(conversation_id: str, query: str, top_k: int = 5) -> tuple[str, list]:
     """
     Retrieves the top-k most relevant chunks for the given query

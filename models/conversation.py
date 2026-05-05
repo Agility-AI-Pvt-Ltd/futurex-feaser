@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, Date, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, Date, String, Text, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 
 from core.db_base import Base
@@ -7,6 +7,9 @@ from core.db_base import Base
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
+    __table_args__ = (
+        Index("ix_chat_sessions_author_conversation", "authorId", "conversation_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     authorId = Column(String, index=True)
