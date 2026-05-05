@@ -17,6 +17,7 @@ START
 """
 
 from langgraph.graph import StateGraph, START, END
+from core.llm_factory import get_llm
 from pipeline.state import AgentState
 from pipeline.tools import (
     chat_filter_node,
@@ -54,52 +55,78 @@ def route_chat(state: AgentState) -> str:
     return "modify_query"
 
 
-# ── Graph ─────────────────────────────────────────────────────────────────────
-workflow = StateGraph(AgentState)
+def build_graph(
+    *,
+    cross_question_llm=None,
+    vagueness_llm=None,
+    modify_query_llm=None,
+    analysis_llm=None,
+    engagement_llm=None,
+):
+    workflow = StateGraph(AgentState)
 
-# Add Nodes
-workflow.add_node("load_context",         load_context_node)
-workflow.add_node("idea_vagueness_filter", idea_vagueness_filter_node)
-workflow.add_node("vague_idea_response",  vague_idea_response_node)
-workflow.add_node("chat_filter",          chat_filter_node)
-workflow.add_node("cross_question",       cross_question_node)
-workflow.add_node("invalid_chat_response",invalid_chat_response_node)
-workflow.add_node("modify_query",         modify_query_node)
-workflow.add_node("web_research",         web_research_node)
-workflow.add_node("analyzer",             llm_agent_node)
-workflow.add_node("engagement_question",  engagement_question_node)
+    cross_question_llm = cross_question_llm or get_llm()
+    vagueness_llm = vagueness_llm or get_llm(temperature=0)
+    modify_query_llm = modify_query_llm or get_llm(temperature=0.3)
+    analysis_llm = analysis_llm or get_llm()
+    engagement_llm = engagement_llm or get_llm(temperature=0.4)
 
-# Add Edges
-workflow.add_edge(START, "load_context")
-workflow.add_edge("load_context", "idea_vagueness_filter")
+    workflow.add_node("load_context", load_context_node)
+    workflow.add_node(
+        "idea_vagueness_filter",
+        lambda state: idea_vagueness_filter_node(state, vagueness_llm),
+    )
+    workflow.add_node("vague_idea_response", vague_idea_response_node)
+    workflow.add_node("chat_filter", chat_filter_node)
+    workflow.add_node(
+        "cross_question",
+        lambda state: cross_question_node(state, cross_question_llm),
+    )
+    workflow.add_node("invalid_chat_response", invalid_chat_response_node)
+    workflow.add_node(
+        "modify_query",
+        lambda state: modify_query_node(state, modify_query_llm),
+    )
+    workflow.add_node("web_research", web_research_node)
+    workflow.add_node("analyzer", lambda state: llm_agent_node(state, analysis_llm))
+    workflow.add_node(
+        "engagement_question",
+        lambda state: engagement_question_node(state, engagement_llm),
+    )
 
-workflow.add_conditional_edges(
-    "idea_vagueness_filter",
-    route_vagueness,
-    {
-        "vague": "vague_idea_response",
-        "ok":    "chat_filter",
-    },
-)
+    workflow.add_edge(START, "load_context")
+    workflow.add_edge("load_context", "idea_vagueness_filter")
 
-workflow.add_edge("vague_idea_response", END)
+    workflow.add_conditional_edges(
+        "idea_vagueness_filter",
+        route_vagueness,
+        {
+            "vague": "vague_idea_response",
+            "ok": "chat_filter",
+        },
+    )
 
-workflow.add_conditional_edges(
-    "chat_filter",
-    route_chat,
-    {
-        "invalid_chat_response": "invalid_chat_response",
-        "cross_question":        "cross_question",
-        "modify_query":          "modify_query",
-    },
-)
+    workflow.add_edge("vague_idea_response", END)
 
-workflow.add_edge("cross_question",        END)
-workflow.add_edge("invalid_chat_response", END)
+    workflow.add_conditional_edges(
+        "chat_filter",
+        route_chat,
+        {
+            "invalid_chat_response": "invalid_chat_response",
+            "cross_question": "cross_question",
+            "modify_query": "modify_query",
+        },
+    )
 
-workflow.add_edge("modify_query",  "web_research")
-workflow.add_edge("web_research",  "analyzer")
-workflow.add_edge("analyzer",      "engagement_question")
-workflow.add_edge("engagement_question", END)
+    workflow.add_edge("cross_question", END)
+    workflow.add_edge("invalid_chat_response", END)
 
-app = workflow.compile()
+    workflow.add_edge("modify_query", "web_research")
+    workflow.add_edge("web_research", "analyzer")
+    workflow.add_edge("analyzer", "engagement_question")
+    workflow.add_edge("engagement_question", END)
+
+    return workflow.compile()
+
+
+app = build_graph()
