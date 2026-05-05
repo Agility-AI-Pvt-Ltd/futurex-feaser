@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 from api.dependencies import get_db
 from core.config import settings
+from core.llm_factory import get_llm
 from core.scrape_usage import enforce_daily_scrape_limit
 from lecturebot.rag import delete_transcript_points, index_transcript
 from lecturebot.runner import run_chat_pipeline
@@ -630,6 +631,7 @@ async def engagement_reply_endpoint(
     derived_question = engagement_question or generate_engagement_question_from_analysis(
         first_session.idea or "your startup idea",
         state_model.analysis or "",
+        get_llm(temperature=0.4),
     )
 
     reply = generate_engagement_reply_from_analysis(
@@ -637,6 +639,7 @@ async def engagement_reply_endpoint(
         raw_analysis=state_model.analysis or "",
         engagement_question=derived_question,
         founder_answer=founder_answer,
+        llm=get_llm(temperature=0.4),
     )
     if not reply:
         reply = (
@@ -754,6 +757,7 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
         "engagement_question": generate_engagement_question_from_analysis(
             first_session.idea or "",
             state_model.analysis or "",
+            get_llm(temperature=0.4),
         ),
         "qa_history": state_model.qa_history or [],
         "messages": [

@@ -8,6 +8,7 @@ Add new tools here and wire them into graph.py.
 import asyncio
 import json
 import re
+from typing import Any
 from core.config import settings
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
@@ -28,6 +29,12 @@ LOW_SIGNAL_WORDS = {
     "app", "platform", "tool", "startup", "business", "service", "product",
     "idea", "something", "anything", "random", "test", "testing",
 }
+
+
+def _extract_llm_content(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    return getattr(response, "content", "") or ""
 
 
 def _tokenize_text(value: str) -> list[str]:
@@ -87,14 +94,12 @@ def _validate_chat_input(state: AgentState) -> tuple[bool, str]:
     return True, ""
 
 
-def cross_question_node(state: AgentState) -> dict:
+def cross_question_node(state: AgentState, llm) -> dict:
     """
     Tool: Cross Question (New Chat)
     Generates a clarifying question to ask the user.
     """
     print("--- NODE EXECUTING: cross_question_node ---")
-    from core.llm_factory import get_llm
-    llm = get_llm()
 
     history_str = "\n".join([f"User: {h['user']}\nAI: {h['ai']}" for h in state.get('conversation_history', [])])
     
@@ -107,7 +112,7 @@ def cross_question_node(state: AgentState) -> dict:
         previous_analysis=state.get('analysis', '')
     )
     response = llm.invoke(prompt)
-    return {"analysis": response.content}
+    return {"analysis": _extract_llm_content(response)}
 
 
 def load_context_node(state: AgentState) -> dict:
@@ -139,7 +144,7 @@ def chat_filter_node(state: AgentState) -> dict:
     }
 
 
-def idea_vagueness_filter_node(state: AgentState) -> dict:
+def idea_vagueness_filter_node(state: AgentState, llm) -> dict:
     """
     LLM-powered gatekeeper that determines whether the user's startup idea
     is genuinely meaningful enough to warrant web research and analysis.
@@ -149,7 +154,6 @@ def idea_vagueness_filter_node(state: AgentState) -> dict:
         vague_message (str) – friendly, specific feedback for the user
     """
     print("--- NODE EXECUTING: idea_vagueness_filter_node ---")
-    from core.llm_factory import get_llm
 
     idea            = (state.get("idea")            or "").strip()
     problem_solved  = (state.get("problem_solved")  or "").strip()
@@ -180,8 +184,7 @@ def idea_vagueness_filter_node(state: AgentState) -> dict:
     )
 
     try:
-        llm = get_llm(temperature=0)
-        raw = llm.invoke(prompt).content.strip()
+        raw = _extract_llm_content(llm.invoke(prompt)).strip()
         # Strip accidental markdown fences
         raw = raw.replace("```json", "").replace("```", "").strip()
         data = json.loads(raw)
@@ -228,7 +231,7 @@ def invalid_chat_response_node(state: AgentState) -> dict:
     return {"analysis": message}
 
 
-def modify_query_node(state: AgentState) -> dict:
+def modify_query_node(state: AgentState, llm) -> dict:
 
     """
     Tool: Modify User Query
@@ -239,8 +242,6 @@ def modify_query_node(state: AgentState) -> dict:
     Returns both a flat string (for DB) and a list (for multi-search).
     """
     print("--- NODE EXECUTING: modify_query_node ---")
-    from core.llm_factory import get_llm
-    llm = get_llm(temperature=0.3)
 
     history_str = "\n".join([f"User: {h['user']}\nAI: {h['ai']}" for h in state.get('conversation_history', [])])
 
@@ -258,7 +259,7 @@ def modify_query_node(state: AgentState) -> dict:
         f'["AI pet trainer startup competitors", "AI pet training apps market", "AI pet startup Y Combinator"]'
     )
     response = llm.invoke(prompt)
-    raw = response.content.strip()
+    raw = _extract_llm_content(response).strip()
 
     # Parse the JSON array; fall back to a single query if LLM misbehaves
     try:
@@ -365,14 +366,12 @@ async def web_research_node(state: AgentState) -> dict:
         run_logger.close()
 
 
-def llm_agent_node(state: AgentState) -> dict:
+def llm_agent_node(state: AgentState, llm) -> dict:
     """
     Tool: LLM Feasibility Analyser
     Calls the Groq LLM to produce a structured feasibility report.
     """
     print("--- NODE EXECUTING: llm_agent_node ---")
-    from core.llm_factory import get_llm
-    llm = get_llm()
 
     # ── Parallelize Embedding & LLM Call ──
     # The LLM API call takes time (waiting on network).
@@ -398,10 +397,10 @@ def llm_agent_node(state: AgentState) -> dict:
         search_results=state['search_results']
     )
     response = llm.invoke(prompt)
-    return {"analysis": response.content}
+    return {"analysis": _extract_llm_content(response)}
 
 
-def generate_engagement_question_from_analysis(idea: str, raw_analysis: str) -> str:
+def generate_engagement_question_from_analysis(idea: str, raw_analysis: str, llm) -> str:
     cleaned_analysis = (raw_analysis or "").strip()
     if not cleaned_analysis:
         return ""
@@ -413,9 +412,6 @@ def generate_engagement_question_from_analysis(idea: str, raw_analysis: str) -> 
 
     if not isinstance(report, dict):
         return ""
-
-    from core.llm_factory import get_llm
-    llm = get_llm(temperature=0.4)
 
     prompt = (
         "You are helping continue a startup feasibility conversation after a report was generated.\n"
@@ -440,7 +436,7 @@ def generate_engagement_question_from_analysis(idea: str, raw_analysis: str) -> 
     )
 
     try:
-        return (llm.invoke(prompt).content or "").strip()
+        return _extract_llm_content(llm.invoke(prompt)).strip()
     except Exception:
         return ""
 
@@ -450,6 +446,7 @@ def generate_engagement_reply_from_analysis(
     raw_analysis: str,
     engagement_question: str,
     founder_answer: str,
+    llm,
 ) -> str:
     cleaned_analysis = (raw_analysis or "").strip()
     founder_answer = (founder_answer or "").strip()
@@ -463,9 +460,6 @@ def generate_engagement_reply_from_analysis(
 
     if not isinstance(report, dict):
         return ""
-
-    from core.llm_factory import get_llm
-    llm = get_llm(temperature=0.4)
 
     prompt = (
         "You are a startup advisor continuing a feasibility conversation.\n"
@@ -489,12 +483,12 @@ def generate_engagement_reply_from_analysis(
     )
 
     try:
-        return (llm.invoke(prompt).content or "").strip()
+        return _extract_llm_content(llm.invoke(prompt)).strip()
     except Exception:
         return ""
 
 
-def engagement_question_node(state: AgentState) -> dict:
+def engagement_question_node(state: AgentState, llm) -> dict:
     """
     Generates one engagement-driving follow-up question from the completed
     feasibility report so the conversation naturally continues.
@@ -503,5 +497,6 @@ def engagement_question_node(state: AgentState) -> dict:
     question = generate_engagement_question_from_analysis(
         state.get("idea", ""),
         state.get("analysis", "") or "",
+        llm,
     )
     return {"engagement_question": question}
