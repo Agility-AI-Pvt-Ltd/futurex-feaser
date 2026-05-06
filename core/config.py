@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     SCRAPE_RUN_LOG_DIR: str = Field(default="scrape_run_logs")
     SCRAPED_LOGX_DIR: str = Field(default="scraped_logx")
     FEASIBILITY_CHAT_FILTER_ENABLED: bool = Field(default=True)
-    CRAWLER_URL_TIMEOUT_SECONDS: int = Field(default=20)
+    CRAWLER_URL_TIMEOUT_SECONDS: int = Field(default=5)
 
     # ── Noise Remover ────────────────────────────────────────────────────────
     NOISE_REMOVER_ENABLED: bool = Field(default=False)

@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from api.routes import router
 from core.config import settings
 from core.database import init_db
@@ -127,6 +127,24 @@ async def log_http_traffic(request: Request, call_next):
             },
         )
         raise
+
+    is_streaming_response = (
+        isinstance(response, StreamingResponse)
+        or response.headers.get("content-type", "").startswith("text/event-stream")
+    )
+    if is_streaming_response:
+        duration_ms = round((perf_counter() - started_at) * 1000, 3)
+        log_event(
+            logger,
+            "http_response_streaming_started",
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+            headers=sanitize_headers(response.headers),
+            response_body="[streaming response omitted]",
+        )
+        return response
 
     response_body = b""
     if hasattr(response, "body") and response.body is not None:

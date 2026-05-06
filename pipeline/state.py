@@ -4,7 +4,7 @@ pipeline/state.py
 Shared TypedDict that defines the LangGraph agent state.
 """
 
-from typing import TypedDict, List, NotRequired
+from typing import TypedDict, List, NotRequired, Any
 
 
 class AgentState(TypedDict):
@@ -37,3 +37,5 @@ class AgentState(TypedDict):
     # ── QA Memory (sliding window + LLM summary) ─────────────────────────────
     qa_history: NotRequired[List[dict]]   # full list of {"q": ..., "a": ...} turns
     qa_summary: NotRequired[str]          # LLM-compressed summary of older turns
+    on_log: NotRequired[Any]              # Optional callback for real-time logging
+    on_scrape_event: NotRequired[Any]     # Optional callback for structured URL scrape events

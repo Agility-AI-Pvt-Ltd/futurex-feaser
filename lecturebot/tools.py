@@ -6,9 +6,11 @@ from core.config import settings
 from core.llm_factory import get_llm
 from core.logging import get_logger, truncate_for_log
 from core.observability import ls_traceable
+from pipeline.tools import _extract_json_payload
 from lecturebot.prompts import (
     get_memory_summary_messages,
     get_question_analysis_messages,
+    get_relevance_check_messages,
     get_rag_chat_messages,
 )
 from lecturebot.rag import search_similar
@@ -22,6 +24,10 @@ ANSWER_FALLBACK = (
 )
 LOW_SIGNAL_USER_MESSAGES = {"hi", "hii", "hello", "hey", "ok", "okay", "thanks"}
 DEFAULT_RELATION = "standalone"
+RELEVANCE_REFUSAL = (
+    "That question does not seem to be covered by this transcript, so I should not answer it as if it were. "
+    "Please ask about topics actually discussed in the uploaded lecture."
+)
 
 
 def _recent_history(history: list[dict], limit: int) -> list[dict]:
@@ -67,6 +73,28 @@ def _fallback_question_analysis(state: ChatPipelineState) -> dict:
     }
 
 
+def _fallback_relevance_check(state: ChatPipelineState) -> dict:
+    if state.get("conversation_relation") == "greeting":
+        return {
+            "relevance_label": "relevant",
+            "relevance_confidence": "low",
+            "relevance_reason": "Greeting messages are allowed without transcript grounding.",
+        }
+
+    if state.get("context_chunks"):
+        return {
+            "relevance_label": "partially_relevant",
+            "relevance_confidence": "low",
+            "relevance_reason": "Retrieved transcript chunks exist, so allow a grounded partial answer.",
+        }
+
+    return {
+        "relevance_label": "irrelevant",
+        "relevance_confidence": "low",
+        "relevance_reason": "No transcript context was retrieved for the question.",
+    }
+
+
 @ls_traceable(run_type="tool", name="lecture_analyze_question_node", tags=["lecturebot", "node"])
 def analyze_question_node(state: ChatPipelineState) -> dict:
     trace_id = state.get("trace_id", "unknown")
@@ -78,7 +106,7 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
             memory_summary=state.get("memory_summary", ""),
         )
         response = llm.invoke(messages)
-        parsed = json.loads((response.content or "").strip())
+        parsed = json.loads(_extract_json_payload(response.content or ""))
         result = {
             "conversation_relation": parsed.get("relation", DEFAULT_RELATION),
             "relation_confidence": parsed.get("confidence", "medium"),
@@ -120,6 +148,51 @@ def retrieve_context_node(state: ChatPipelineState) -> dict:
         "context_text": context_text,
         "sources": sources,
     }
+
+
+@ls_traceable(run_type="tool", name="lecture_relevance_check_node", tags=["lecturebot", "relevance"])
+def relevance_check_node(state: ChatPipelineState) -> dict:
+    trace_id = state.get("trace_id", "unknown")
+
+    if state.get("conversation_relation") == "greeting":
+        return {
+            "relevance_label": "relevant",
+            "relevance_confidence": "high",
+            "relevance_reason": "Greeting messages bypass transcript relevance gating.",
+        }
+
+    try:
+        llm = get_llm(model=settings.LECTURE_OPENAI_MODEL_NAME, temperature=0.0)
+        messages = get_relevance_check_messages(
+            question=state["question"],
+            resolved_question=state.get("resolved_question", state["question"]),
+            context_text=state.get("context_text", ""),
+            memory_summary=state.get("memory_summary", ""),
+        )
+        response = llm.invoke(messages)
+        parsed = json.loads(_extract_json_payload(response.content or ""))
+        label = parsed.get("relevance", "irrelevant")
+        if label not in {"relevant", "partially_relevant", "irrelevant"}:
+            raise ValueError(f"Unexpected relevance label: {label}")
+        result = {
+            "relevance_label": label,
+            "relevance_confidence": parsed.get("confidence", "medium"),
+            "relevance_reason": parsed.get("reason", ""),
+        }
+    except Exception:
+        logger.exception("relevance_check.error trace_id=%s", trace_id)
+        result = _fallback_relevance_check(state)
+    return result
+
+
+@ls_traceable(run_type="tool", name="lecture_irrelevant_question_node", tags=["lecturebot", "relevance"])
+def irrelevant_question_node(state: ChatPipelineState) -> dict:
+    reason = state.get("relevance_reason", "").strip()
+    if reason:
+        answer = f"{RELEVANCE_REFUSAL} Reason: {reason}"
+    else:
+        answer = RELEVANCE_REFUSAL
+    return {"answer": answer, "sources": []}
 
 
 @ls_traceable(run_type="tool", name="lecture_answer_question_node", tags=["lecturebot", "node"])

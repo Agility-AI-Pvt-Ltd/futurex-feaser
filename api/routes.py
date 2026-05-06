@@ -7,6 +7,7 @@ from json import JSONDecodeError
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
@@ -15,9 +16,10 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 from api.dependencies import get_db
-from core.config import settings
+from core.database import settings, SessionLocal
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
+import asyncio
 from core.scrape_usage import enforce_daily_scrape_limit
 from lecturebot.rag import (
     delete_collection_if_exists,
@@ -212,6 +214,39 @@ async def _handle_feasibility_chat(
     background_tasks: BackgroundTasks,
     db: Session,
 ) -> FeasibilityChatResponse:
+    # Use the streaming implementation but collect all events and return the last one
+    # This avoids duplicating the complex logic
+    result_analysis = None
+    result_engagement = None
+    conv_id = None
+    is_vague = False
+
+    async for event_str in _handle_feasibility_chat_stream(input_data, background_tasks, db):
+        if event_str.startswith("data: "):
+            try:
+                event = json.loads(event_str[6:])
+                if event["type"] == "final":
+                    result_analysis = event.get("analysis")
+                    result_engagement = event.get("engagement_question")
+                    conv_id = event.get("conversation_id")
+                    is_vague = event.get("is_vague", False)
+                elif event["type"] == "node" and event.get("node") == "vague_idea_response":
+                    is_vague = True
+            except Exception:
+                continue
+
+    return FeasibilityChatResponse(
+        response=result_analysis or "Error in analysis",
+        conversation_id=conv_id or input_data.conversation_id or str(uuid.uuid4()),
+        analysis=result_analysis,
+        engagement_question=result_engagement,
+        is_vague=is_vague
+    )
+
+async def _handle_feasibility_chat_stream(
+    input_data: IdeaInput,
+    background_tasks: BackgroundTasks,
+):
     is_new_chat = True
     conv_id = input_data.conversation_id
 
@@ -223,43 +258,53 @@ async def _handle_feasibility_chat(
 
     initial_analysis = ""
     existing_messages: list[ChatSession] = []
-    if conv_id:
-        existing_messages = _load_feasibility_conversation_messages(db, conv_id)
-        existing = existing_messages[0] if existing_messages else None
-        state_model = (
-            db.query(AgentStateModel)
-            .filter(AgentStateModel.conversation_id == conv_id)
-            .first()
-        )
+    
+    # 1. Initial read and close session immediately
+    db = SessionLocal()
+    try:
+        if conv_id:
+            existing_messages = _load_feasibility_conversation_messages(db, conv_id)
+            existing = existing_messages[0] if existing_messages else None
+            state_model = (
+                db.query(AgentStateModel)
+                .filter(AgentStateModel.conversation_id == conv_id)
+                .first()
+            )
 
-        if existing:
-            is_new_chat = False
-            original_idea = existing.idea or original_idea
-            problem_solved = existing.what_problem_it_solves or problem_solved
-            ideal_customer = existing.ideal_customer or ideal_customer
-            effective_author_id = existing.authorId or effective_author_id
-            current_message = input_data.idea
+            if existing:
+                is_new_chat = False
+                original_idea = existing.idea or original_idea
+                problem_solved = existing.what_problem_it_solves or problem_solved
+                ideal_customer = existing.ideal_customer or ideal_customer
+                effective_author_id = existing.authorId or effective_author_id
+                current_message = input_data.idea
 
-        if state_model and existing:
-            initial_analysis = state_model.analysis or ""
-    else:
-        conv_id = str(uuid.uuid4())
+            if state_model and existing:
+                initial_analysis = state_model.analysis or ""
+        else:
+            conv_id = str(uuid.uuid4())
 
-    if not is_new_chat:
-        enforce_daily_scrape_limit(db, effective_author_id)
+        if not is_new_chat:
+            enforce_daily_scrape_limit(db, effective_author_id)
 
-    history_dicts = []
-    if not is_new_chat and conv_id:
-        for session in existing_messages:
-            history_dicts.append({"user": session.human_message, "ai": session.ai_message})
+        history_dicts = [
+            {"user": s.human_message, "ai": s.ai_message}
+            for s in existing_messages
+        ]
+    finally:
+        db.close()
 
-    logging.info(
-        "[Feasibility Context] conv=%s loaded_history_turns=%s first_ts=%s last_ts=%s",
-        conv_id,
-        len(existing_messages),
-        existing_messages[0].timestamp.isoformat() if existing_messages else None,
-        existing_messages[-1].timestamp.isoformat() if existing_messages else None,
-    )
+    stream_queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+
+    def on_log(message):
+        if message and message.strip():
+            # Filter out the "==" separator lines to keep the UI clean
+            if message.startswith("="): return
+            loop.call_soon_threadsafe(stream_queue.put_nowait, {"type": "log", "message": message})
+
+    def on_scrape_event(event_data: dict):
+        loop.call_soon_threadsafe(stream_queue.put_nowait, {"type": "scrape_url", **event_data})
 
     initial_state = {
         "idea": original_idea,
@@ -275,88 +320,125 @@ async def _handle_feasibility_chat(
         "optimized_query": "",
         "optimized_queries": [],
         "current_message": current_message,
+        "on_log": on_log,
+        "on_scrape_event": on_scrape_event,
     }
 
-    result = await langgraph_app.ainvoke(initial_state)
+    yield f"data: {json.dumps({'type': 'node', 'node': 'start', 'message': 'Initializing research context...', 'conversation_id': conv_id})}\n\n"
 
+    async def run_graph():
+        try:
+            async for event in langgraph_app.astream(initial_state, stream_mode="updates"):
+                await stream_queue.put({"type": "node_event", "event": event})
+        except Exception as e:
+            logging.exception("Error in LangGraph streaming")
+            await stream_queue.put({"type": "error", "message": str(e)})
+        finally:
+            await stream_queue.put({"type": "end"})
+
+    asyncio.create_task(run_graph())
+
+    accumulated_state: dict = {}
+    while True:
+        item = await stream_queue.get()
+        if item["type"] == "end":
+            break
+        if item["type"] == "error":
+            msg = "Error: " + str(item.get("message", "Unknown error"))
+            yield f"data: {json.dumps({'type': 'log', 'message': msg})}\n\n"
+            break
+        if item["type"] == "log":
+            yield f"data: {json.dumps(item)}\n\n"
+        if item["type"] == "scrape_url":
+            yield f"data: {json.dumps(item)}\n\n"
+        if item["type"] == "node_event":
+            event = item["event"]
+            for node_name, node_state in event.items():
+                msg = f"Executing {node_name}..."
+                if node_name == "web_research": msg = "Conducting deep web research and scraping..."
+                elif node_name == "analyzer": msg = "Analyzing findings and generating feasibility report..."
+                elif node_name == "modify_query": msg = "Optimizing search queries for better market coverage..."
+                elif node_name == "idea_vagueness_filter": msg = "Verifying idea clarity..."
+
+                yield f"data: {json.dumps({'type': 'node', 'node': node_name, 'message': msg})}\n\n"
+                if isinstance(node_state, dict):
+                    accumulated_state.update(node_state)
+
+    result = accumulated_state
+    
     # ── Vagueness gate: idea was too vague — skip DB writes and RAG ───────────
     if result.get("is_vague", False):
         vague_msg = result.get("analysis") or (
             "Your idea is too vague for me to run a meaningful analysis. "
             "Please describe it more specifically."
         )
-        return FeasibilityChatResponse(
-            response=vague_msg,
+        yield f"data: {json.dumps({'type': 'final', 'analysis': vague_msg, 'conversation_id': conv_id, 'is_vague': True})}\n\n"
+        return
+
+    # 2. Re-open session only for the final write
+    db = SessionLocal()
+    try:
+        new_entry = ChatSession(
+            authorId=effective_author_id,
             conversation_id=conv_id,
-            analysis=vague_msg,
-            engagement_question=None,
-            is_vague=True,
+            user_name=input_data.user_name,
+            idea=original_idea,
+            what_problem_it_solves=problem_solved,
+            ideal_customer=ideal_customer,
+            human_message=current_message,
+            ai_message=result.get("analysis", "Error in analysis"),
         )
+        db.add(new_entry)
 
-    new_entry = ChatSession(
-        authorId=effective_author_id,
-        conversation_id=conv_id,
-        user_name=input_data.user_name,
-        idea=original_idea,
-        what_problem_it_solves=problem_solved,
-        ideal_customer=ideal_customer,
-        human_message=current_message,
-        ai_message=result.get("analysis", "Error in analysis"),
-    )
-    db.add(new_entry)
+        state_model = (
+            db.query(AgentStateModel)
+            .filter(AgentStateModel.conversation_id == conv_id)
+            .first()
+        )
+        if not state_model:
+            state_model = AgentStateModel(conversation_id=conv_id)
+            db.add(state_model)
 
-    state_model = (
-        db.query(AgentStateModel)
-        .filter(AgentStateModel.conversation_id == conv_id)
-        .first()
-    )
-    if not state_model:
-        state_model = AgentStateModel(conversation_id=conv_id)
-        db.add(state_model)
+        state_model.optimized_query = result.get("optimized_query", state_model.optimized_query)
+        state_model.search_results = result.get("search_results", state_model.search_results)
+        state_model.analysis = result.get("analysis", state_model.analysis)
 
-    state_model.optimized_query = result.get("optimized_query", state_model.optimized_query)
-    state_model.search_results = result.get("search_results", state_model.search_results)
-    state_model.analysis = result.get("analysis", state_model.analysis)
+        raw_analysis = result.get("analysis", "")
+        if raw_analysis and not is_new_chat:
+            try:
+                data = json.loads(_extract_json_payload(raw_analysis))
+                report = (
+                    db.query(FeasibilityReport)
+                    .filter(FeasibilityReport.conversation_id == conv_id)
+                    .first()
+                )
+                if not report:
+                    report = FeasibilityReport(conversation_id=conv_id)
+                    db.add(report)
 
-    raw_analysis = result.get("analysis", "")
-    if raw_analysis and not is_new_chat:
-        try:
-            data = json.loads(_extract_json_payload(raw_analysis))
-            report = (
-                db.query(FeasibilityReport)
-                .filter(FeasibilityReport.conversation_id == conv_id)
-                .first()
+                report.chain_of_thought = data.get("chain_of_thought")
+                report.idea_fit = data.get("idea_fit")
+                report.competitors = data.get("competitors")
+                report.opportunity = data.get("opportunity")
+                report.score = data.get("score")
+                report.targeting = data.get("targeting")
+                report.next_step = data.get("next_step")
+            except (JSONDecodeError, ValueError):
+                logging.warning("LLM analysis output was not valid JSON for conversation %s", conv_id)
+
+        db.commit()
+
+        if not is_new_chat and embed_conversation_context is not None:
+            background_tasks.add_task(
+                run_embedding_with_retry,
+                conversation_id=conv_id,
+                search_results=result.get("search_results", ""),
+                analysis=state_model.analysis,
             )
-            if not report:
-                report = FeasibilityReport(conversation_id=conv_id)
-                db.add(report)
+    finally:
+        db.close()
 
-            report.chain_of_thought = data.get("chain_of_thought")
-            report.idea_fit = data.get("idea_fit")
-            report.competitors = data.get("competitors")
-            report.opportunity = data.get("opportunity")
-            report.score = data.get("score")
-            report.targeting = data.get("targeting")
-            report.next_step = data.get("next_step")
-        except (JSONDecodeError, ValueError):
-            logging.warning("LLM analysis output was not valid JSON for conversation %s", conv_id)
-
-    db.commit()
-
-    if not is_new_chat and embed_conversation_context is not None:
-        background_tasks.add_task(
-            run_embedding_with_retry,
-            conversation_id=conv_id,
-            search_results="",
-            analysis=state_model.analysis,
-        )
-
-    return FeasibilityChatResponse(
-        response="Analysis Complete" if not is_new_chat else "Researching your idea...",
-        conversation_id=conv_id,
-        analysis=result.get("analysis"),
-        engagement_question=result.get("engagement_question"),
-    )
+    yield f"data: {json.dumps({'type': 'final', 'analysis': result.get('analysis'), 'engagement_question': result.get('engagement_question'), 'conversation_id': conv_id, 'is_report': not is_new_chat or result.get('is_vague', False) == False and 'optimized_query' in result})}\n\n"
 
 
 @ls_traceable(run_type="chain", name="handle_lecture_chat", tags=["api", "lecturebot"])
@@ -541,6 +623,25 @@ async def chat_endpoint(
         IdeaInput.model_validate(payload),
         background_tasks,
         db,
+    )
+
+
+@router.post("/chat/stream", tags=["Chat"])
+async def chat_stream_endpoint(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        payload = await request.json()
+    except JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+
+    return StreamingResponse(
+        _handle_feasibility_chat_stream(
+            IdeaInput.model_validate(payload),
+            background_tasks,
+        ),
+        media_type="text/event-stream",
     )
 
 

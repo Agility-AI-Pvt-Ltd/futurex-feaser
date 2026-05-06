@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ddgs import DDGS
-from crawl4ai import AsyncWebCrawler
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from core.config import settings
 from core.logging import configure_logging, get_logger, log_event, log_exception
 from core.observability import ls_traceable
@@ -51,7 +51,7 @@ def _safe_get_result_html(result: Any) -> str:
 
 
 class ScrapeRunLogger:
-    def __init__(self, conversation_id: str, idea: str):
+    def __init__(self, conversation_id: str, idea: str, on_log=None, on_scrape_event=None):
         log_dir = Path(settings.scrape_run_log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         full_log_dir = Path(settings.scraped_logx_dir)
@@ -67,10 +67,28 @@ class ScrapeRunLogger:
         self._fh = self.path.open("w", encoding="utf-8")
         self.full_text_path = full_log_dir / full_text_filename
         self._full_fh = self.full_text_path.open("w", encoding="utf-8")
+        self.on_log = on_log
+        self.on_scrape_event = on_scrape_event
 
     def write(self, text: str = "") -> None:
         self._fh.write(f"{text}\n")
         self._fh.flush()
+        if self.on_log:
+            self.on_log(text)
+
+    def emit_scrape_event(self, url: str, title: str, status: str, **metadata: Any) -> None:
+        """Emit a structured URL scrape event to the frontend stream."""
+        if self.on_scrape_event:
+            hostname = urlparse(url).hostname or ""
+            source_type = "reddit" if _is_reddit_url(url) else "web"
+            self.on_scrape_event({
+                "url": url,
+                "title": title,
+                "status": status,
+                "domain": hostname.replace("www.", ""),
+                "source_type": source_type,
+                **metadata,
+            })
 
     def write_full_text(self, text: str = "") -> None:
         self._full_fh.write(f"{text}\n")
@@ -97,8 +115,8 @@ def _sanitize_filename(value: str) -> str:
     return normalized or "run"
 
 
-def create_scrape_run_logger(conversation_id: str, idea: str) -> ScrapeRunLogger:
-    run_logger = ScrapeRunLogger(conversation_id=conversation_id, idea=idea)
+def create_scrape_run_logger(conversation_id: str, idea: str, on_log=None, on_scrape_event=None) -> ScrapeRunLogger:
+    run_logger = ScrapeRunLogger(conversation_id=conversation_id, idea=idea, on_log=on_log, on_scrape_event=on_scrape_event)
     run_logger.section("SCRAPE RUN START")
     run_logger.write(f"timestamp_utc: {datetime.now(timezone.utc).isoformat()}")
     run_logger.write(f"conversation_id: {conversation_id}")
@@ -627,6 +645,15 @@ def _is_reddit_url(url: str) -> bool:
     return "reddit.com" in hostname or "redd.it" in hostname
 
 
+def _to_old_reddit_url(url: str) -> str:
+    """Convert www.reddit.com to old.reddit.com for plain-HTML scraping without auth."""
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if "reddit.com" in hostname and "old.reddit.com" not in hostname:
+        return parsed._replace(netloc=parsed.netloc.replace(hostname, "old.reddit.com")).geturl()
+    return url
+
+
 def _create_reddit_client():
     if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
         raise ValueError("Reddit API credentials are not configured.")
@@ -798,7 +825,18 @@ async def crawler_service_with_logging(
                 run_logger.write_full_text("")
 
             try:
+                crawl_url = url  # may be overridden to old.reddit.com on PRAW fallback
+                praw_attempted = False
                 if _is_reddit_url(url):
+                    praw_attempted = True
+                    if run_logger:
+                        run_logger.emit_scrape_event(
+                            url,
+                            title,
+                            "crawling",
+                            message="Reading Reddit post and expanding comments with PRAW...",
+                            extraction_method="praw",
+                        )
                     try:
                         reddit_text, reddit_meta = await _fetch_reddit_submission_text_async(url)
                         logging.info(
@@ -822,6 +860,20 @@ async def crawler_service_with_logging(
                             run_logger.write_full_text(reddit_text)
                             run_logger.write_full_text("")
 
+                        if run_logger:
+                            run_logger.emit_scrape_event(
+                                url,
+                                title,
+                                "done",
+                                message=(
+                                    "Reddit post scraped via PRAW "
+                                    f"from r/{reddit_meta['subreddit']} with "
+                                    f"{reddit_meta['expanded_comment_count']} comments."
+                                ),
+                                extraction_method="praw",
+                                subreddit=reddit_meta["subreddit"],
+                                expanded_comment_count=reddit_meta["expanded_comment_count"],
+                            )
                         content_items.append(
                             {
                                 "title": title,
@@ -860,23 +912,53 @@ async def crawler_service_with_logging(
                                 run_logger.write("")
                                 run_logger.write_full_text("STATUS: skipped_after_praw_failure")
                                 run_logger.write_full_text("")
+                                run_logger.emit_scrape_event(
+                                    url,
+                                    title,
+                                    "skipped",
+                                    message="Reddit post skipped after PRAW failed.",
+                                    extraction_method="praw",
+                                )
                             print(f"[REDDIT] Skipped after PRAW failure: {url}")
                             print("-" * 80)
                             continue
+                        crawl_url = _to_old_reddit_url(url)
                         log_event(
                             event_logger,
                             "reddit_api_fallback",
                             url=url,
+                            crawl_url=crawl_url,
                             title=title,
                             extraction_method="praw",
-                            fallback_method="crawler",
+                            fallback_method="crawl4ai_old_reddit",
                             severity="error",
                             status="fallback_started",
                         )
+                        print(f"[REDDIT] PRAW failed — falling back to crawl4ai via {crawl_url}")
+                        if run_logger:
+                            run_logger.emit_scrape_event(
+                                url,
+                                title,
+                                "crawling",
+                                message="PRAW could not read the Reddit post, trying old.reddit.com with crawl4ai...",
+                                extraction_method="crawl4ai_old_reddit",
+                                crawl_url=crawl_url,
+                            )
 
-                result = await asyncio.wait_for(
-                    crawler.arun(url=url),
-                    timeout=max(settings.CRAWLER_URL_TIMEOUT_SECONDS, 1),
+                if not praw_attempted and run_logger:
+                    run_logger.emit_scrape_event(
+                        url,
+                        title,
+                        "crawling",
+                        message="Scraping page content with crawl4ai...",
+                        extraction_method="crawl4ai",
+                    )
+
+                result = await crawler.arun(
+                    url=crawl_url,
+                    config=CrawlerRunConfig(
+                        page_timeout=max(settings.CRAWLER_URL_TIMEOUT_SECONDS, 1) * 1000,
+                    ),
                 )
 
                 markdown = result.markdown or ""
@@ -929,6 +1011,12 @@ async def crawler_service_with_logging(
                         run_logger.write("")
                         run_logger.write_full_text("STATUS: skipped_early_junk_check")
                         run_logger.write_full_text("")
+                        run_logger.emit_scrape_event(
+                            url,
+                            title,
+                            "skipped",
+                            message="Skipped after the page looked like boilerplate or junk content.",
+                        )
                     continue
 
                 logging.info(
@@ -986,6 +1074,12 @@ async def crawler_service_with_logging(
                         run_logger.write("")
                         run_logger.write_full_text("STATUS: skipped_low_quality_core")
                         run_logger.write_full_text("")
+                        run_logger.emit_scrape_event(
+                            url,
+                            title,
+                            "skipped",
+                            message="Skipped after cleanup because useful content was too thin.",
+                        )
                     continue
 
                 logging.info(
@@ -996,6 +1090,13 @@ async def crawler_service_with_logging(
                     run_logger.write("")
                     run_logger.write_full_text("STATUS: kept")
                     run_logger.write_full_text("")
+                    run_logger.emit_scrape_event(
+                        url,
+                        title,
+                        "done",
+                        message="Page scraped and kept for analysis.",
+                        extraction_method="crawl4ai",
+                    )
 
                 content_items.append(
                     {
@@ -1024,6 +1125,12 @@ async def crawler_service_with_logging(
                     run_logger.write_full_text("STATUS: crawl_error")
                     run_logger.write_full_text(f"error: {e}")
                     run_logger.write_full_text("")
+                    run_logger.emit_scrape_event(
+                        url,
+                        title,
+                        "skipped",
+                        message=f"Scrape failed: {e}",
+                    )
                 if _is_reddit_url(url):
                     log_exception(
                         event_logger,
