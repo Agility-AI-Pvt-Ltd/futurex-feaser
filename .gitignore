@@ -61,3 +61,5 @@ rag_run_logs/
 docker-compose.override.yml
 
 sandbox/frontend_lecturebot/node_modules
+
+scraped_logx/
