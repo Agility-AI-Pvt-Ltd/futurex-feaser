@@ -65,3 +65,5 @@ sandbox/frontend_lecturebot/node_modules
 scraped_logx/
 
 transcripts_data/
+
+uv.lock
