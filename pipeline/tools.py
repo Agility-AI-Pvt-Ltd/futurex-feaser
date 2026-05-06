@@ -385,7 +385,9 @@ async def web_research_node(state: AgentState) -> dict:
     idea = state['idea']
     problem_solved = state['problem_solved']
     conversation_id = state.get("conversation_id", "")
-    run_logger = create_scrape_run_logger(conversation_id=conversation_id, idea=idea)
+    on_log = state.get("on_log")
+    on_scrape_event = state.get("on_scrape_event")
+    run_logger = create_scrape_run_logger(conversation_id=conversation_id, idea=idea, on_log=on_log, on_scrape_event=on_scrape_event)
 
     try:
         run_logger.section("WEB RESEARCH INPUT")
@@ -472,22 +474,6 @@ def llm_agent_node(state: AgentState, llm) -> dict:
     Calls the Groq LLM to produce a structured feasibility report.
     """
     print("--- NODE EXECUTING: llm_agent_node ---")
-
-    # ── Parallelize Embedding & LLM Call ──
-    # The LLM API call takes time (waiting on network).
-    # We can perform the CPU-intensive embedding of search_results locally at the same time.
-    try:
-        print("  [RAG] 🚀 Starting background embedding for search_results...")
-        start_embedding_thread(
-            state.get("conversation_id", ""),
-            state.get("search_results", ""),
-            "",
-        )
-    except Exception:
-        logger.exception(
-            "embedding.thread_start_failed conversation_id=%s",
-            state.get("conversation_id", ""),
-        )
 
     prompt = get_feasibility_prompt(
         idea=state['idea'],

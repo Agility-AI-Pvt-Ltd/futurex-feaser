@@ -105,6 +105,48 @@ def get_question_analysis_messages(
     ]
 
 
+def get_relevance_check_messages(
+    question: str,
+    resolved_question: str,
+    context_text: str,
+    memory_summary: str = "",
+):
+    output_schema = {
+        "relevance": "relevant | partially_relevant | irrelevant",
+        "confidence": "low | medium | high",
+        "reason": "short explanation grounded in the transcript context",
+    }
+    return [
+        SystemMessage(
+            content=(
+                "Decide whether the student's question is answerable from the transcript context. "
+                "Return only valid JSON. "
+                "Use 'relevant' when the transcript directly covers the question. "
+                "Use 'partially_relevant' when the transcript covers related material but not the exact ask. "
+                "Use 'irrelevant' when the transcript does not meaningfully cover the topic."
+            )
+        ),
+        SystemMessage(
+            content=(
+                "--- MEMORY SUMMARY ---\n"
+                f"{memory_summary or 'No prior session summary yet.'}\n\n"
+                "--- OUTPUT JSON SCHEMA ---\n"
+                f"{json.dumps(output_schema)}"
+            )
+        ),
+        HumanMessage(
+            content=(
+                "--- USER QUESTION ---\n"
+                f"{question}\n\n"
+                "--- RESOLVED QUESTION ---\n"
+                f"{resolved_question}\n\n"
+                "--- TRANSCRIPT CONTEXT ---\n"
+                f"{context_text or 'No transcript context retrieved.'}"
+            )
+        ),
+    ]
+
+
 def get_memory_summary_messages(
     previous_summary: str,
     recent_history: List[dict],

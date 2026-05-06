@@ -20,3 +20,18 @@ and a question is aked after scraping.
 after this follow up question is asked by user on whihc rag is used to anwer him,
 the embeddign are genrrted after the acraping is done, at paralley while retuernting the output of llm about the startup idea to user, we also return trace to the user.
 
+
+
+
+
+
+
+ui : /Users/krishnakumar/Downloads/RESUME/AGILITY_AI/FINAL FUTUREX/frontend/FutureX
+
+it is not showing status if work going on backgeoiund such as scraping and which website or uel is is currently scraping reddit post scarping which post is is scraping
+
+these details are not shown as status to the user
+
+they must be shown to them
+
+also tell to not panic to see random website and un relarted urls , as unreleated urls might be some times very helpful

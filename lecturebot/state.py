@@ -22,5 +22,8 @@ class ChatPipelineState(TypedDict):
     context_chunks: NotRequired[List[dict]]
     context_text: NotRequired[str]
     sources: NotRequired[List[str]]
+    relevance_label: NotRequired[str]
+    relevance_confidence: NotRequired[str]
+    relevance_reason: NotRequired[str]
     answer: NotRequired[str]
     updated_memory_summary: NotRequired[str]
