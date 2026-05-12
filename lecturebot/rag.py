@@ -16,10 +16,11 @@ from qdrant_client.models import (
 from fastembed import TextEmbedding
 
 from core.config import settings
+from core.fastembed_cache import get_fastembed_cache_dir
 from core.logging import get_logger, truncate_for_log
+from core.qdrant_client import get_local_qdrant_client
 
 
-client_qdrant: QdrantClient | None = None
 embedding_model: TextEmbedding | None = None
 logger = get_logger(__name__)
 
@@ -32,15 +33,16 @@ def get_embedding_model() -> TextEmbedding:
     global embedding_model
     if embedding_model is None:
         logger.info("embedding_model.load name=%s", settings.LECTURE_EMBEDDING_MODEL)
-        embedding_model = TextEmbedding(model_name=settings.LECTURE_EMBEDDING_MODEL, providers=["CPUExecutionProvider"])
+        embedding_model = TextEmbedding(
+            model_name=settings.LECTURE_EMBEDDING_MODEL,
+            cache_dir=get_fastembed_cache_dir(),
+            providers=["CPUExecutionProvider"],
+        )
     return embedding_model
 
 
 def get_qdrant_client() -> QdrantClient:
-    global client_qdrant
-    if client_qdrant is None:
-        client_qdrant = QdrantClient(path=settings.lecture_qdrant_path)
-    return client_qdrant
+    return get_local_qdrant_client(settings.lecture_qdrant_path)
 
 
 def ensure_collection(collection_name: str | None = None) -> None:

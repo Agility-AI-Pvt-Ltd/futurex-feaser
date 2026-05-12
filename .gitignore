@@ -67,3 +67,5 @@ scraped_logx/
 transcripts_data/
 
 uv.lock
+sandbox/quora_results/
+sandbox/.quora_browser/

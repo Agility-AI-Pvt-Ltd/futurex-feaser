@@ -15,12 +15,15 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from api.dependencies import get_db
+from api.dependencies import enforce_api_rate_limit, get_db
 from core.database import settings, SessionLocal
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
 import asyncio
+from core.redis_client import get_redis
 from core.scrape_usage import enforce_daily_scrape_limit
+
+HISTORY_CACHE_TTL = 60  # seconds
 from lecturebot.rag import (
     delete_collection_if_exists,
     delete_transcript_points,
@@ -70,7 +73,7 @@ except ImportError:
     embed_conversation_context = None
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(enforce_api_rate_limit)])
 
 
 class IdeaInput(BaseModel):
@@ -427,6 +430,16 @@ async def _handle_feasibility_chat_stream(
                 logging.warning("LLM analysis output was not valid JSON for conversation %s", conv_id)
 
         db.commit()
+
+        _inv_redis = get_redis()
+        if _inv_redis is not None:
+            try:
+                pattern = f"idealab:history:{effective_author_id}:*"
+                keys = await _inv_redis.keys(pattern)
+                if keys:
+                    await _inv_redis.delete(*keys)
+            except Exception as exc:
+                logger.warning("Redis cache invalidation failed: %s", exc)
 
         if not is_new_chat and embed_conversation_context is not None:
             background_tasks.add_task(
@@ -819,7 +832,23 @@ async def get_history(
         ]
 
     if not author_id:
-        return []
+        return {"items": [], "total": 0, "offset": offset, "limit": limit}
+
+    cache_key = f"idealab:history:{author_id}:{offset}:{limit}"
+    redis = get_redis()
+    if redis is not None:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                return json.loads(cached)
+        except Exception as exc:
+            logger.warning("Redis GET failed for history cache: %s", exc)
+
+    total: int = (
+        db.query(func.count(func.distinct(ChatSession.conversation_id)))
+        .filter(ChatSession.authorId == author_id)
+        .scalar()
+    ) or 0
 
     subquery = (
         db.query(
@@ -843,15 +872,28 @@ async def get_history(
         offset=offset,
     ).all()
 
-    return [
-        {
-            "conversation_id": session.conversation_id,
-            "idea": session.idea,
-            "timestamp": session.timestamp,
-            "user_name": session.user_name,
-        }
-        for session in sessions
-    ]
+    result = {
+        "items": [
+            {
+                "conversation_id": session.conversation_id,
+                "idea": session.idea,
+                "timestamp": str(session.timestamp),
+                "user_name": session.user_name,
+            }
+            for session in sessions
+        ],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
+
+    if redis is not None:
+        try:
+            await redis.set(cache_key, json.dumps(result), ex=HISTORY_CACHE_TTL)
+        except Exception as exc:
+            logger.warning("Redis SET failed for history cache: %s", exc)
+
+    return result
 
 
 @router.get("/history/{identifier}")

@@ -73,9 +73,15 @@ async def lifespan(_app):
     yield
 
     try:
-        from rag.embedder import close_qdrant
+        from core.redis_client import close_redis
 
-        close_qdrant()
+        await close_redis()
+    except Exception:
+        pass
+    try:
+        from core.qdrant_client import close_qdrant_clients
+
+        close_qdrant_clients()
     except Exception:
         pass
     print("Shutting down...")

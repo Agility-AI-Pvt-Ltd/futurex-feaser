@@ -1,9 +1,11 @@
 import os
 import json
 import logging
-from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from core.config import settings
+from core.fastembed_cache import get_fastembed_cache_dir
 from core.logging import get_logger, log_event, log_exception
+from core.qdrant_client import close_qdrant_clients, get_local_qdrant_client
 
 # Try to get the logger, if not, it will be standard
 logger = get_logger(__name__)
@@ -11,7 +13,7 @@ logger = get_logger(__name__)
 # Lazy initialization so the app doesn't crash if imported before pip install
 embedder = None
 qdrant_client = None
-QDRANT_PATH = str(Path(__file__).resolve().parent.parent / "qdrant_data")
+QDRANT_PATH = settings.qdrant_path
 COLLECTION_NAME = "feasibility_context"
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 EMBEDDING_LOCAL_FILES_ONLY = os.getenv("EMBEDDING_LOCAL_FILES_ONLY", "").lower() in {"1", "true", "yes"}
@@ -20,10 +22,9 @@ def _init_qdrant(load_embedder: bool = True):
     global embedder, qdrant_client
     if qdrant_client is None:
         try:
-            from qdrant_client import QdrantClient
             from qdrant_client.models import VectorParams, Distance
 
-            qdrant_client = QdrantClient(path=QDRANT_PATH)
+            qdrant_client = get_local_qdrant_client(QDRANT_PATH)
 
             if not qdrant_client.collection_exists(COLLECTION_NAME):
                 qdrant_client.create_collection(
@@ -40,7 +41,11 @@ def _init_qdrant(load_embedder: bool = True):
 
             # BGE small is lightweight and keeps the vector size aligned with
             # the 384-dim Qdrant collection.
-            embedder = TextEmbedding(model_name=EMBEDDING_MODEL_NAME, providers=["CPUExecutionProvider"])
+            embedder = TextEmbedding(
+                model_name=EMBEDDING_MODEL_NAME,
+                cache_dir=get_fastembed_cache_dir(),
+                providers=["CPUExecutionProvider"],
+            )
         except Exception as e:
             logger.error(f"Failed to initialize fastembed: {e}")
             raise
@@ -50,7 +55,7 @@ def close_qdrant():
     global qdrant_client
     if qdrant_client is not None:
         try:
-            qdrant_client.close()
+            close_qdrant_clients()
         except Exception as e:
             logger.warning(f"Failed to close Qdrant client cleanly: {e}")
         finally:

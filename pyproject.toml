@@ -7,4 +7,5 @@ requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13.0",
     "langsmith>=0.8.0",
+    "python-jose[cryptography]>=3.5.0",
 ]

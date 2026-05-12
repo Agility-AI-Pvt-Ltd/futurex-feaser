@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     OPENROUTER_LLM_CLEANER_TIMEOUT_SECONDS: int = Field(default=8)
     OPENROUTER_LLM_CLEANER_MAX_SOURCES: int = Field(default=2)
 
-    # ── Legacy LLM Rate Limiting ─────────────────────────────────────────────
+    # ── API / Legacy LLM Rate Limiting ──────────────────────────────────────
+    API_RATE_LIMIT_ENABLED: bool = Field(default=True)
+    API_RATE_LIMIT_REQUESTS: Optional[int] = Field(default=None)
+    API_RATE_LIMIT_WINDOW_SECONDS: Optional[int] = Field(default=None)
     LLM_RATE_LIMIT_REQUESTS: int = Field(default=10)
     LLM_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60)
 
@@ -59,9 +62,20 @@ class Settings(BaseSettings):
     NOISE_REMOVER_ENABLED: bool = Field(default=False)
     NOISE_REMOVER_THRESHOLD: float = Field(default=0.4)
     NOISE_REMOVER_MODEL: str = Field(default="BAAI/bge-small-en-v1.5")
+    FASTEMBED_CACHE_DIR: str = Field(default="/data/cache/fastembed")
+    FASTEMBED_FALLBACK_CACHE_DIR: str = Field(default="fastembed_cache")
 
     # ── CORS ───────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: List[str] = Field(default=["*"])
+
+    # ── Internal Service JWT Auth ─────────────────────────────────────────────
+    INTERNAL_AUTH_ENABLED: bool = Field(default=True)
+    INTERNAL_AUTH_ISSUER: str = Field(default="main-backend")
+    INTERNAL_AUTH_AUDIENCE: str = Field(default="microservice")
+    INTERNAL_AUTH_ALGORITHM: str = Field(default="HS256")
+    INTERNAL_AUTH_JWT_SECRET: str = Field(default="")
+    INTERNAL_AUTH_JWT_PUBLIC_KEY: str = Field(default="")
+    INTERNAL_AUTH_REQUIRED_SERVICE: Optional[str] = Field(default="main-backend")
 
     # ── Axiom Logging ────────────────────────────────────────────────────────
     AXIOM_TOKEN: str = Field(default="")
@@ -76,6 +90,8 @@ class Settings(BaseSettings):
     QA_MAX_STORED_TURNS: int = Field(default=100)
     API_DEFAULT_PAGE_SIZE: int = Field(default=50)
     API_MAX_PAGE_SIZE: int = Field(default=200)
+    QDRANT_PATH: str = Field(default="/data/qdrant")
+    QDRANT_FALLBACK_PATH: str = Field(default="qdrant_data")
     RAG_LOG_CHUNK_CHARS: int = Field(default=400)
     RAG_RUN_LOG_DIR: str = Field(default="rag_run_logs")
 
@@ -90,7 +106,7 @@ class Settings(BaseSettings):
     LECTURE_OPENAI_MODEL_NAME: str = Field(default="gpt-4o-mini")
     LECTURE_TRANSCRIPT_STORAGE_PATH: str = Field(default="transcripts_data")
     LECTURE_QDRANT_COLLECTION_NAME: str = Field(default="lecture_transcripts")
-    LECTURE_QDRANT_PATH: str = Field(default="lecture_qdrant")
+    LECTURE_QDRANT_PATH: Optional[str] = Field(default=None)
     LECTURE_EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
     LECTURE_VECTOR_SIZE: int = Field(default=384)
 
@@ -103,10 +119,23 @@ class Settings(BaseSettings):
 
     @property
     def lecture_qdrant_path(self) -> str:
-        raw_path = Path(self.LECTURE_QDRANT_PATH).expanduser()
-        if raw_path.is_absolute():
-            return str(raw_path)
-        return str((BASE_DIR / raw_path).resolve())
+        return self._resolve_path(self.LECTURE_QDRANT_PATH or self.QDRANT_PATH)
+
+    @property
+    def qdrant_path(self) -> str:
+        return self._resolve_path(self.QDRANT_PATH)
+
+    @property
+    def qdrant_fallback_path(self) -> str:
+        return self._resolve_path(self.QDRANT_FALLBACK_PATH)
+
+    @property
+    def fastembed_cache_dir(self) -> str:
+        return self._resolve_path(self.FASTEMBED_CACHE_DIR)
+
+    @property
+    def fastembed_fallback_cache_dir(self) -> str:
+        return self._resolve_path(self.FASTEMBED_FALLBACK_CACHE_DIR)
 
     @property
     def scrape_run_log_dir(self) -> str:
@@ -124,10 +153,25 @@ class Settings(BaseSettings):
 
     @property
     def rag_run_log_dir(self) -> str:
-        raw_path = Path(self.RAG_RUN_LOG_DIR).expanduser()
+        return self._resolve_path(self.RAG_RUN_LOG_DIR)
+
+    def _resolve_path(self, path_value: str) -> str:
+        raw_path = Path(path_value).expanduser()
         if raw_path.is_absolute():
             return str(raw_path)
         return str((BASE_DIR / raw_path).resolve())
+
+    @property
+    def api_rate_limit_requests(self) -> int:
+        if self.API_RATE_LIMIT_REQUESTS is not None:
+            return self.API_RATE_LIMIT_REQUESTS
+        return self.LLM_RATE_LIMIT_REQUESTS
+
+    @property
+    def api_rate_limit_window_seconds(self) -> int:
+        if self.API_RATE_LIMIT_WINDOW_SECONDS is not None:
+            return self.API_RATE_LIMIT_WINDOW_SECONDS
+        return self.LLM_RATE_LIMIT_WINDOW_SECONDS
 
 
 # Single shared instance — import this everywhere

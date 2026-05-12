@@ -27,3 +27,5 @@ qdrant-client
 fastembed
 axiom-py
 python-multipart
+redis[asyncio]
+python-jose[cryptography]

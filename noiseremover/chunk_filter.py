@@ -5,12 +5,18 @@ from typing import List, Sequence
 
 import numpy as np
 
+from core.fastembed_cache import get_fastembed_cache_dir
+
 
 @lru_cache(maxsize=4)
 def _get_sentence_transformer(model_name: str):
     from fastembed import TextEmbedding
 
-    return TextEmbedding(model_name=model_name, providers=["CPUExecutionProvider"])
+    return TextEmbedding(
+        model_name=model_name,
+        cache_dir=get_fastembed_cache_dir(),
+        providers=["CPUExecutionProvider"],
+    )
 
 def preload_text_embedding_model(model_name: str) -> None:
     _get_sentence_transformer(model_name)
