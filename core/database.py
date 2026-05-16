@@ -52,6 +52,7 @@ def _ensure_lecture_metadata_additive_columns():
 
 
 def init_db():
+    
     import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
