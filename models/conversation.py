@@ -85,6 +85,23 @@ class AuthorDailyUsage(Base):
     )
 
 
+class ApiRateLimitBucket(Base):
+    """
+    Postgres fallback for API rate limiting when Redis is unavailable.
+    """
+    __tablename__ = "api_rate_limit_buckets"
+
+    key = Column(String, primary_key=True)
+    request_count = Column(Integer, nullable=False, default=0)
+    window_start = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+
+
 class LectureChatSession(Base):
     __tablename__ = "lecture_chat_sessions"
 

@@ -60,9 +60,9 @@ from models import (
     LectureTranscriptMetadata,
 )
 from pipeline.graph import app as langgraph_app
+from pipeline.feasibility_parser import parse_feasibility_report
 from pipeline.qa_graph import get_qa_graph_mermaid, qa_app as qa_langgraph_app
 from pipeline.tools import (
-    _extract_json_payload,
     generate_engagement_question_from_analysis,
     generate_engagement_reply_from_analysis,
     run_embedding_with_retry,
@@ -435,7 +435,7 @@ async def _handle_feasibility_chat_stream(
         raw_analysis = result.get("analysis", "")
         if raw_analysis and not is_new_chat:
             try:
-                data = json.loads(_extract_json_payload(raw_analysis))
+                data = parse_feasibility_report(raw_analysis)
                 report = (
                     db.query(FeasibilityReport)
                     .filter(FeasibilityReport.conversation_id == conv_id)
@@ -452,8 +452,12 @@ async def _handle_feasibility_chat_stream(
                 report.score = data.get("score")
                 report.targeting = data.get("targeting")
                 report.next_step = data.get("next_step")
-            except (JSONDecodeError, ValueError):
-                logging.warning("LLM analysis output was not valid JSON for conversation %s", conv_id)
+            except ValueError as exc:
+                logging.warning(
+                    "LLM analysis output was not valid JSON for conversation %s: %s",
+                    conv_id,
+                    exc,
+                )
 
         db.commit()
 

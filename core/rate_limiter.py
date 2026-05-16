@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import logging
 import threading
+import asyncio
+from datetime import datetime, timedelta
 from collections import defaultdict, deque
 from time import time
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from fastapi import Request
 
 from core.config import settings
@@ -97,6 +100,89 @@ async def _check_redis_rate_limit(
     return True, 0, remaining
 
 
+def _check_postgres_rate_limit_sync(
+    *,
+    key: str,
+    limit: int,
+    window_seconds: int,
+) -> tuple[bool, int, int] | None:
+    from core.database import SessionLocal
+    from models.conversation import ApiRateLimitBucket
+
+    now = datetime.utcnow()
+    db = SessionLocal()
+    try:
+        bucket = (
+            db.query(ApiRateLimitBucket)
+            .filter(ApiRateLimitBucket.key == key)
+            .with_for_update()
+            .one_or_none()
+        )
+
+        if bucket is None:
+            bucket = ApiRateLimitBucket(
+                key=key,
+                request_count=1,
+                window_start=now,
+                updated_at=now,
+            )
+            db.add(bucket)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                return _check_postgres_rate_limit_sync(
+                    key=key,
+                    limit=limit,
+                    window_seconds=window_seconds,
+                )
+            return True, 0, max(0, limit - 1)
+
+        elapsed_seconds = (now - bucket.window_start).total_seconds()
+        if elapsed_seconds >= window_seconds:
+            bucket.window_start = now
+            bucket.request_count = 1
+            bucket.updated_at = now
+            db.commit()
+            return True, 0, max(0, limit - 1)
+
+        bucket.request_count += 1
+        bucket.updated_at = now
+        retry_after = max(
+            1,
+            int((bucket.window_start + timedelta(seconds=window_seconds) - now).total_seconds()),
+        )
+        remaining = max(0, limit - bucket.request_count)
+        allowed = bucket.request_count <= limit
+        db.commit()
+
+        return allowed, 0 if allowed else retry_after, remaining if allowed else 0
+    except Exception as exc:
+        db.rollback()
+        logger.warning("api_rate_limit.postgres_fallback_failed key=%s error=%s", key, exc)
+        return None
+    finally:
+        db.close()
+
+
+async def _check_postgres_rate_limit(
+    *,
+    key: str,
+    limit: int,
+    window_seconds: int,
+) -> tuple[bool, int, int] | None:
+    try:
+        return await asyncio.to_thread(
+            _check_postgres_rate_limit_sync,
+            key=key,
+            limit=limit,
+            window_seconds=window_seconds,
+        )
+    except Exception as exc:
+        logger.warning("api_rate_limit.postgres_thread_failed key=%s error=%s", key, exc)
+        return None
+
+
 async def check_api_rate_limit(key: str) -> tuple[bool, int, int]:
     limit = max(0, settings.api_rate_limit_requests)
     window_seconds = max(1, settings.api_rate_limit_window_seconds)
@@ -111,6 +197,14 @@ async def check_api_rate_limit(key: str) -> tuple[bool, int, int]:
     )
     if redis_result is not None:
         return redis_result
+
+    postgres_result = await _check_postgres_rate_limit(
+        key=key,
+        limit=limit,
+        window_seconds=window_seconds,
+    )
+    if postgres_result is not None:
+        return postgres_result
 
     return in_memory_rate_limiter.check(
         key,

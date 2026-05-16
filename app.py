@@ -69,6 +69,14 @@ def _preload_runtime_models() -> None:
 async def lifespan(_app):
     threading.Thread(target=_initialize_database, daemon=True).start()
     _preload_runtime_models()
+    try:
+        from core.redis_client import verify_redis_connection
+
+        await verify_redis_connection()
+    except Exception as e:
+        print(f"ERROR: Redis startup check failed: {e}")
+        if settings.REDIS_REQUIRED:
+            raise
 
     yield
 
@@ -196,7 +204,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ── CORS Middleware ───────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

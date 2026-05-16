@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
-
 from core.config import settings
+from core.json_utils import parse_json_from_text
 from core.llm_factory import get_llm
 from core.logging import get_logger, truncate_for_log
 from core.observability import ls_traceable
-from pipeline.tools import _extract_json_payload
 from lecturebot.prompts import (
     get_memory_summary_messages,
     get_question_analysis_messages,
@@ -166,7 +164,7 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
             memory_summary=state.get("memory_summary", ""),
         )
         response = llm.invoke(messages)
-        parsed = json.loads(_extract_json_payload(response.content or ""))
+        parsed = parse_json_from_text(response.content or "", expected_type=dict)
         result = {
             "conversation_relation": parsed.get("relation", DEFAULT_RELATION),
             "answer_mode": parsed.get("answer_mode", RAG_ANSWER_MODE),
@@ -238,7 +236,7 @@ def relevance_check_node(state: ChatPipelineState) -> dict:
             memory_summary=state.get("memory_summary", ""),
         )
         response = llm.invoke(messages)
-        parsed = json.loads(_extract_json_payload(response.content or ""))
+        parsed = parse_json_from_text(response.content or "", expected_type=dict)
         label = parsed.get("relevance", "irrelevant")
         if label not in {"relevant", "partially_relevant", "irrelevant"}:
             raise ValueError(f"Unexpected relevance label: {label}")

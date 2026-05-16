@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     # ── Database ───────────────────────────────────────────────────────────────
     POSTGRES_URL: str = Field(default="")
 
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_URL: str = Field(default="redis://localhost:6379")
+    REDIS_REQUIRED: bool = Field(default=False)
+
     # ── Google Search ──────────────────────────────────────────────────────────
     GOOGLE_API_KEY: str = Field(default="")
     GOOGLE_CSE_ID: str = Field(default="")
@@ -65,7 +69,7 @@ class Settings(BaseSettings):
     FASTEMBED_FALLBACK_CACHE_DIR: str = Field(default="fastembed_cache")
 
     # ── CORS ───────────────────────────────────────────────────────────────────
-    ALLOWED_ORIGINS: List[str] = Field(default=["*"])
+    ALLOWED_ORIGINS: str = Field(default="*")
 
     # ── Internal Service JWT Auth ─────────────────────────────────────────────
     INTERNAL_AUTH_ENABLED: bool = Field(default=True)
@@ -173,6 +177,11 @@ class Settings(BaseSettings):
         if self.API_RATE_LIMIT_WINDOW_SECONDS is not None:
             return self.API_RATE_LIMIT_WINDOW_SECONDS
         return self.LLM_RATE_LIMIT_WINDOW_SECONDS
+
+    @property
+    def allowed_origins(self) -> List[str]:
+        parsed = [origin.strip() for origin in (self.ALLOWED_ORIGINS or "").split(",") if origin.strip()]
+        return parsed or ["*"]
 
 
 # Single shared instance — import this everywhere

@@ -7,14 +7,19 @@ Add new tools here and wire them into graph.py.
 
 import asyncio
 import json
-import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from core.config import settings
+from core.json_utils import extract_json_payload as _extract_json_payload
 from core.logging import get_logger
 from core.observability import ls_traceable
+from pipeline.feasibility_parser import (
+    get_feasibility_report_repair_prompt,
+    normalize_feasibility_report_json,
+    parse_feasibility_report,
+)
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
 from pipeline.prompts.cross_question import get_cross_question_prompt
@@ -29,11 +34,6 @@ from scraper.web import (
 from core.database import SessionLocal
 from models.conversation import ChatSession
 
-
-LOW_SIGNAL_WORDS = {
-    "app", "platform", "tool", "startup", "business", "service", "product",
-    "idea", "something", "anything", "random", "test", "testing",
-}
 logger = get_logger(__name__)
 WEB_RESEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=10)
 
@@ -42,36 +42,6 @@ def _extract_llm_content(response: Any) -> str:
     if isinstance(response, str):
         return response
     return getattr(response, "content", "") or ""
-
-
-def _extract_json_payload(raw_text: str) -> str:
-    raw_text = (raw_text or "").strip()
-    if not raw_text:
-        raise ValueError("Empty LLM response")
-
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text, re.IGNORECASE)
-    if fence_match:
-        return fence_match.group(1).strip()
-
-    start_positions = [idx for idx in (raw_text.find("{"), raw_text.find("[")) if idx != -1]
-    if not start_positions:
-        raise ValueError("No JSON payload found in LLM response")
-
-    start = min(start_positions)
-    opening = raw_text[start]
-    closing = "}" if opening == "{" else "]"
-    depth = 0
-
-    for index in range(start, len(raw_text)):
-        char = raw_text[index]
-        if char == opening:
-            depth += 1
-        elif char == closing:
-            depth -= 1
-            if depth == 0:
-                return raw_text[start : index + 1].strip()
-
-    raise ValueError("Unterminated JSON payload in LLM response")
 
 
 @ls_traceable(run_type="tool", name="embedding_retry", tags=["embedding", "background"])
@@ -129,63 +99,6 @@ async def _run_ddgs_search(query: str, run_logger) -> list[dict]:
     )
 
 
-def _tokenize_text(value: str) -> list[str]:
-    return re.findall(r"[a-zA-Z]{2,}", (value or "").lower())
-
-
-def _looks_like_gibberish(value: str) -> bool:
-    letters = re.findall(r"[a-zA-Z]", value or "")
-    if not letters:
-        return True
-    joined = "".join(letters).lower()
-    if len(joined) < 4:
-        return True
-    vowel_ratio = sum(ch in "aeiou" for ch in joined) / max(len(joined), 1)
-    unique_ratio = len(set(joined)) / max(len(joined), 1)
-    return vowel_ratio < 0.2 or unique_ratio < 0.25
-
-
-def _validate_chat_input(state: AgentState) -> tuple[bool, str]:
-    idea = (state.get("idea") or "").strip()
-    problem_solved = (state.get("problem_solved") or "").strip()
-    ideal_customer = (state.get("ideal_customer") or "").strip()
-    current_message = (state.get("current_message") or "").strip()
-
-    idea_tokens = _tokenize_text(idea)
-    problem_tokens = _tokenize_text(problem_solved)
-    customer_tokens = _tokenize_text(ideal_customer)
-    low_signal_idea_tokens = [token for token in idea_tokens if token not in LOW_SIGNAL_WORDS]
-
-    if len(low_signal_idea_tokens) < 2 or _looks_like_gibberish(idea):
-        return (
-            False,
-            "Please share a clearer startup idea before I run web research. "
-            "Mention what you are building in a meaningful phrase, not a random or vague word.",
-        )
-
-    if len(problem_tokens) < 4 or _looks_like_gibberish(problem_solved):
-        return (
-            False,
-            "Please describe the real problem your idea solves in a little more detail before I run research.",
-        )
-
-    if len(customer_tokens) < 2 or _looks_like_gibberish(ideal_customer):
-        return (
-            False,
-            "Please describe the target customer more clearly before I run research.",
-        )
-
-    if not state.get("is_new_chat", True):
-        reply_tokens = _tokenize_text(current_message)
-        if len(reply_tokens) < 4 or _looks_like_gibberish(current_message):
-            return (
-                False,
-                "Your follow-up reply is too vague for web research. Please answer with a more specific description of features, market, or users.",
-            )
-
-    return True, ""
-
-
 @ls_traceable(run_type="tool", name="cross_question_node", tags=["feasibility", "node"])
 def cross_question_node(state: AgentState, llm) -> dict:
     """
@@ -216,19 +129,6 @@ def load_context_node(state: AgentState) -> dict:
     """
     print("--- NODE EXECUTING: load_context_node ---")
     return {"conversation_history": state.get("conversation_history", [])}
-
-
-def chat_filter_node(state: AgentState) -> dict:
-    """
-    Lightweight gate to avoid expensive scraping for obviously vague or
-    meaningless idea inputs.
-    """
-    print("--- NODE EXECUTING: chat_filter_node ---")
-    is_valid, message = _validate_chat_input(state)
-    return {
-        "input_valid": is_valid,
-        "validation_message": message,
-    }
 
 
 @ls_traceable(run_type="tool", name="idea_vagueness_filter_node", tags=["feasibility", "node"])
@@ -475,7 +375,24 @@ def llm_agent_node(state: AgentState, llm) -> dict:
         search_results=state['search_results']
     )
     response = llm.invoke(prompt)
-    return {"analysis": _extract_llm_content(response)}
+    raw_analysis = _extract_llm_content(response)
+
+    try:
+        return {"analysis": normalize_feasibility_report_json(raw_analysis)}
+    except Exception as exc:
+        logger.warning("feasibility.analysis.parse_failed.initial error=%s", exc)
+
+    try:
+        repair_prompt = get_feasibility_report_repair_prompt(raw_analysis)
+        repaired_response = llm.invoke(repair_prompt)
+        repaired_analysis = _extract_llm_content(repaired_response)
+        normalized = normalize_feasibility_report_json(repaired_analysis)
+        logger.info("feasibility.analysis.repaired_json")
+        return {"analysis": normalized}
+    except Exception as exc:
+        logger.warning("feasibility.analysis.parse_failed.repair error=%s", exc)
+
+    return {"analysis": raw_analysis}
 
 
 @ls_traceable(run_type="chain", name="generate_engagement_question", tags=["engagement"])
@@ -485,11 +402,8 @@ def generate_engagement_question_from_analysis(idea: str, raw_analysis: str, llm
         return ""
 
     try:
-        report = json.loads(_extract_json_payload(cleaned_analysis))
+        report = parse_feasibility_report(cleaned_analysis)
     except Exception:
-        return ""
-
-    if not isinstance(report, dict):
         return ""
 
     prompt = (
@@ -534,11 +448,8 @@ def generate_engagement_reply_from_analysis(
         return ""
 
     try:
-        report = json.loads(_extract_json_payload(cleaned_analysis))
+        report = parse_feasibility_report(cleaned_analysis)
     except Exception:
-        return ""
-
-    if not isinstance(report, dict):
         return ""
 
     prompt = (

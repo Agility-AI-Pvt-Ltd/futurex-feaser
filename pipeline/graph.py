@@ -9,22 +9,18 @@ Graph flow
 START
   └─► load_context
         └─► idea_vagueness_filter  ← LLM gatekeeper (new ideas only)
-              ├─► [vague]  vague_idea_response ──► END
-              └─► [ok]     chat_filter
-                    ├─► [invalid] invalid_chat_response ──► END
-                    ├─► [new]     cross_question         ──► END
-                    └─► [follow]  modify_query ──► web_research ──► analyzer ──► END
+              ├─► [vague]   vague_idea_response ──► END
+              ├─► [new]     cross_question      ──► END
+              └─► [follow]  modify_query ──► web_research ──► analyzer ──► END
 """
 
 from langgraph.graph import StateGraph, START, END
 from core.llm_factory import get_llm
 from pipeline.state import AgentState
 from pipeline.tools import (
-    chat_filter_node,
     cross_question_node,
     engagement_question_node,
     idea_vagueness_filter_node,
-    invalid_chat_response_node,
     load_context_node,
     modify_query_node,
     vague_idea_response_node,
@@ -40,19 +36,11 @@ def route_vagueness(state: AgentState) -> str:
     if state.get("is_vague", False):
         print("--- ROUTER: Idea is VAGUE → vague_idea_response ---")
         return "vague"
-    print("--- ROUTER: Idea passed vagueness gate → chat_filter ---")
-    return "ok"
-
-
-def route_chat(state: AgentState) -> str:
-    if not state.get("input_valid", True):
-        print("--- ROUTER: Routing to invalid_chat_response_node ---")
-        return "invalid_chat_response"
     if state.get("is_new_chat", True):
         print("--- ROUTER: Routing to cross_question_node ---")
-        return "cross_question"
+        return "new"
     print("--- ROUTER: Routing to modify_query_node ---")
-    return "modify_query"
+    return "follow"
 
 
 def build_graph(
@@ -77,12 +65,10 @@ def build_graph(
         lambda state: idea_vagueness_filter_node(state, vagueness_llm),
     )
     workflow.add_node("vague_idea_response", vague_idea_response_node)
-    workflow.add_node("chat_filter", chat_filter_node)
     workflow.add_node(
         "cross_question",
         lambda state: cross_question_node(state, cross_question_llm),
     )
-    workflow.add_node("invalid_chat_response", invalid_chat_response_node)
     workflow.add_node(
         "modify_query",
         lambda state: modify_query_node(state, modify_query_llm),
@@ -102,24 +88,13 @@ def build_graph(
         route_vagueness,
         {
             "vague": "vague_idea_response",
-            "ok": "chat_filter",
+            "new": "cross_question",
+            "follow": "modify_query",
         },
     )
 
     workflow.add_edge("vague_idea_response", END)
-
-    workflow.add_conditional_edges(
-        "chat_filter",
-        route_chat,
-        {
-            "invalid_chat_response": "invalid_chat_response",
-            "cross_question": "cross_question",
-            "modify_query": "modify_query",
-        },
-    )
-
     workflow.add_edge("cross_question", END)
-    workflow.add_edge("invalid_chat_response", END)
 
     workflow.add_edge("modify_query", "web_research")
     workflow.add_edge("web_research", "analyzer")
