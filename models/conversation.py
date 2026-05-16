@@ -163,6 +163,9 @@ class LectureTranscriptMetadata(Base):
     tags = Column(Text, nullable=False, default="")
     storage_path = Column(String, nullable=False)
     qdrant_collection_name = Column(String, nullable=False)
+    transcript_text = Column(Text, nullable=True)
+    transcript_summary = Column(Text, nullable=True)
+    summary_generated_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     transcript = relationship("LectureTranscriptAsset", back_populates="metadata_entry")

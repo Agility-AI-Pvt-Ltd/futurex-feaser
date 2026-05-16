@@ -55,7 +55,6 @@ class Settings(BaseSettings):
     SCRAPE_DAILY_LIMIT: int = Field(default=6)
     SCRAPE_RUN_LOG_DIR: str = Field(default="scrape_run_logs")
     SCRAPED_LOGX_DIR: str = Field(default="scraped_logx")
-    FEASIBILITY_CHAT_FILTER_ENABLED: bool = Field(default=True)
     CRAWLER_URL_TIMEOUT_SECONDS: int = Field(default=5)
 
     # ── Noise Remover ────────────────────────────────────────────────────────
@@ -103,6 +102,8 @@ class Settings(BaseSettings):
     LECTURE_RETRIEVAL_HISTORY_MESSAGES: int = Field(default=4)
     LECTURE_SUMMARY_TRIGGER_MESSAGES: int = Field(default=10)
     LECTURE_MEMORY_SUMMARY_CHARS: int = Field(default=3000)
+    LECTURE_TRANSCRIPT_SUMMARY_CHUNK_CHARS: int = Field(default=12000)
+    LECTURE_TRANSCRIPT_SUMMARY_MAX_CHARS: int = Field(default=6000)
     LECTURE_OPENAI_MODEL_NAME: str = Field(default="gpt-4o-mini")
     LECTURE_TRANSCRIPT_STORAGE_PATH: str = Field(default="transcripts_data")
     LECTURE_QDRANT_COLLECTION_NAME: str = Field(default="lecture_transcripts")

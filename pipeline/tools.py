@@ -224,12 +224,6 @@ def chat_filter_node(state: AgentState) -> dict:
     meaningless idea inputs.
     """
     print("--- NODE EXECUTING: chat_filter_node ---")
-    if not settings.FEASIBILITY_CHAT_FILTER_ENABLED:
-        return {
-            "input_valid": True,
-            "validation_message": "",
-        }
-
     is_valid, message = _validate_chat_input(state)
     return {
         "input_valid": is_valid,

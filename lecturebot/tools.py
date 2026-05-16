@@ -15,6 +15,7 @@ from lecturebot.prompts import (
 )
 from lecturebot.rag import search_similar
 from lecturebot.state import ChatPipelineState
+from lecturebot.transcript_summary import get_or_create_transcript_summary
 
 
 logger = get_logger(__name__)
@@ -24,10 +25,41 @@ ANSWER_FALLBACK = (
 )
 LOW_SIGNAL_USER_MESSAGES = {"hi", "hii", "hello", "hey", "ok", "okay", "thanks"}
 DEFAULT_RELATION = "standalone"
+RAG_ANSWER_MODE = "rag"
+WHOLE_TRANSCRIPT_SUMMARY_MODE = "whole_transcript_summary"
 RELEVANCE_REFUSAL = (
     "That question does not seem to be covered by this transcript, so I should not answer it as if it were. "
     "Please ask about topics actually discussed in the uploaded lecture."
 )
+SUMMARY_INTENT_TERMS = {
+    "summary",
+    "summarize",
+    "summarise",
+    "overview",
+    "recap",
+    "gist",
+    "tl;dr",
+    "tldr",
+    "main points",
+    "key points",
+    "important points",
+    "lecture notes",
+    "short notes",
+    "study notes",
+}
+WHOLE_TRANSCRIPT_TERMS = {
+    "it",
+    "this",
+    "lecture",
+    "transcript",
+    "recording",
+    "session",
+    "class",
+    "video",
+    "whole",
+    "entire",
+    "full",
+}
 
 
 def _recent_history(history: list[dict], limit: int) -> list[dict]:
@@ -41,6 +73,29 @@ def _build_retrieval_query(state: ChatPipelineState) -> str:
     # into a standalone 'resolved_question' that incorporates necessary context.
     # We should search ONLY using this focused resolved_question for maximum semantic accuracy.
     return state.get("resolved_question", state["question"]).strip()
+
+
+def _looks_like_whole_transcript_summary_request(*texts: str) -> bool:
+    combined = " ".join(text for text in texts if text).strip().lower()
+    if not combined:
+        return False
+
+    has_summary_term = any(term in combined for term in SUMMARY_INTENT_TERMS)
+    if not has_summary_term:
+        about_phrases = {
+            "what is this about",
+            "what is it about",
+            "what is the lecture about",
+            "what is this lecture about",
+            "what is the transcript about",
+            "what is this transcript about",
+        }
+        return any(phrase in combined for phrase in about_phrases)
+
+    has_whole_target = any(term in combined.split() for term in WHOLE_TRANSCRIPT_TERMS)
+    has_phrase_target = any(term in combined for term in WHOLE_TRANSCRIPT_TERMS if " " in term)
+    is_short_summary_request = len(combined.split()) <= 12
+    return has_whole_target or has_phrase_target or is_short_summary_request
 
 
 def _fallback_question_analysis(state: ChatPipelineState) -> dict:
@@ -66,6 +121,11 @@ def _fallback_question_analysis(state: ChatPipelineState) -> dict:
 
     return {
         "conversation_relation": relation,
+        "answer_mode": (
+            WHOLE_TRANSCRIPT_SUMMARY_MODE
+            if _looks_like_whole_transcript_summary_request(question)
+            else RAG_ANSWER_MODE
+        ),
         "relation_confidence": "low",
         "relation_reason": "fallback heuristic",
         "resolved_question": question,
@@ -109,6 +169,7 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
         parsed = json.loads(_extract_json_payload(response.content or ""))
         result = {
             "conversation_relation": parsed.get("relation", DEFAULT_RELATION),
+            "answer_mode": parsed.get("answer_mode", RAG_ANSWER_MODE),
             "relation_confidence": parsed.get("confidence", "medium"),
             "relation_reason": parsed.get("reason", ""),
             "resolved_question": parsed.get("resolved_question", state["question"]),
@@ -117,6 +178,13 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
     except Exception:
         logger.exception("question_analysis.error trace_id=%s", trace_id)
         result = _fallback_question_analysis(state)
+    if result.get("answer_mode") not in {RAG_ANSWER_MODE, WHOLE_TRANSCRIPT_SUMMARY_MODE}:
+        result["answer_mode"] = RAG_ANSWER_MODE
+    if _looks_like_whole_transcript_summary_request(
+        state["question"],
+        result.get("resolved_question", ""),
+    ):
+        result["answer_mode"] = WHOLE_TRANSCRIPT_SUMMARY_MODE
     return result
 
 
@@ -193,6 +261,22 @@ def irrelevant_question_node(state: ChatPipelineState) -> dict:
     else:
         answer = RELEVANCE_REFUSAL
     return {"answer": answer, "sources": []}
+
+
+@ls_traceable(run_type="tool", name="lecture_answer_transcript_summary_node", tags=["lecturebot", "summary"])
+def answer_transcript_summary_node(state: ChatPipelineState) -> dict:
+    result = get_or_create_transcript_summary(
+        transcript_id=state.get("transcript_id"),
+        trace_id=state.get("trace_id", "unknown"),
+    )
+    return {
+        "answer": result.answer,
+        "sources": result.sources,
+        "summary_cache_hit": result.cache_hit,
+        "relevance_label": "relevant",
+        "relevance_confidence": "high",
+        "relevance_reason": "Whole-transcript summary requests bypass top-k RAG.",
+    }
 
 
 @ls_traceable(run_type="tool", name="lecture_answer_question_node", tags=["lecturebot", "node"])

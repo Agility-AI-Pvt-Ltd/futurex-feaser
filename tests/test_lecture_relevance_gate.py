@@ -1,7 +1,12 @@
 import unittest
 
-from lecturebot.graph import route_relevance
-from lecturebot.tools import _fallback_relevance_check, irrelevant_question_node
+from lecturebot.graph import route_after_question_analysis, route_relevance
+from lecturebot.tools import (
+    _fallback_relevance_check,
+    _fallback_question_analysis,
+    _looks_like_whole_transcript_summary_request,
+    irrelevant_question_node,
+)
 
 
 class LectureRelevanceGateTests(unittest.TestCase):
@@ -28,6 +33,20 @@ class LectureRelevanceGateTests(unittest.TestCase):
     def test_route_relevance_sends_irrelevant_to_refusal(self):
         self.assertEqual(route_relevance({"relevance_label": "irrelevant"}), "irrelevant")
         self.assertEqual(route_relevance({"relevance_label": "relevant"}), "answer")
+
+    def test_summary_intent_routes_around_rag(self):
+        self.assertTrue(_looks_like_whole_transcript_summary_request("Give me a summary of it"))
+        self.assertEqual(
+            _fallback_question_analysis({"question": "Give me key points of this lecture"})[
+                "answer_mode"
+            ],
+            "whole_transcript_summary",
+        )
+        self.assertEqual(
+            route_after_question_analysis({"answer_mode": "whole_transcript_summary"}),
+            "summary",
+        )
+        self.assertEqual(route_after_question_analysis({"answer_mode": "rag"}), "rag")
 
     def test_irrelevant_question_node_returns_refusal_answer(self):
         result = irrelevant_question_node(

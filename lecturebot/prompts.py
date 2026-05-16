@@ -62,6 +62,64 @@ def get_rag_chat_messages(
     ]
 
 
+def get_transcript_chunk_summary_messages(
+    *,
+    transcript_name: str,
+    chunk_text: str,
+    chunk_number: int,
+    total_chunks: int,
+):
+    return [
+        SystemMessage(
+            content=(
+                "You summarize lecture transcript text for a student learning platform. "
+                "Use only the provided transcript text. Capture concrete topics, definitions, "
+                "examples, arguments, instructor guidance, and important transitions. "
+                "Do not invent material that is not present."
+            )
+        ),
+        HumanMessage(
+            content=(
+                f"Transcript: {transcript_name or 'uploaded transcript'}\n"
+                f"Chunk {chunk_number} of {total_chunks}\n\n"
+                "--- TRANSCRIPT TEXT ---\n"
+                f"{chunk_text}\n\n"
+                "--- TASK ---\n"
+                "Write a detailed but compact summary of this chunk."
+            )
+        ),
+    ]
+
+
+def get_transcript_summary_merge_messages(
+    *,
+    transcript_name: str,
+    chunk_summaries: List[str],
+    max_chars: int,
+):
+    joined_summaries = "\n\n".join(
+        f"--- CHUNK {index + 1} SUMMARY ---\n{summary}"
+        for index, summary in enumerate(chunk_summaries)
+    )
+    return [
+        SystemMessage(
+            content=(
+                "You create a comprehensive study summary from ordered lecture chunk summaries. "
+                "Use only the supplied summaries. Preserve the lecture's structure and key details. "
+                "Make the result useful for answering later overview, recap, key-points, and notes questions. "
+                f"Return only the summary, no more than {max_chars} characters."
+            )
+        ),
+        HumanMessage(
+            content=(
+                f"Transcript: {transcript_name or 'uploaded transcript'}\n\n"
+                f"{joined_summaries}\n\n"
+                "--- FINAL SUMMARY ---"
+            )
+        ),
+    ]
+
+
 def get_question_analysis_messages(
     question: str,
     history: List[dict],
@@ -73,6 +131,7 @@ def get_question_analysis_messages(
     )
     output_schema = {
         "relation": "standalone | follow_up_to_user | follow_up_to_ai | answering_previous_question | clarification | greeting",
+        "answer_mode": "rag | whole_transcript_summary",
         "confidence": "low | medium | high",
         "reason": "short explanation",
         "resolved_question": "self-contained rewritten user intent for retrieval and answering",
@@ -84,6 +143,9 @@ def get_question_analysis_messages(
                 "Analyze whether the user's latest message depends on earlier conversation. "
                 "Reason silently and return only valid JSON. "
                 "If the user is continuing or clarifying, rewrite it into a self-contained question."
+                " Set answer_mode='whole_transcript_summary' when the user asks for an overview, "
+                "summary, recap, main points, key points, notes, gist, or asks what the whole lecture/transcript is about. "
+                "Use answer_mode='rag' for specific factual questions that should be answered from relevant transcript chunks."
             )
         ),
         SystemMessage(

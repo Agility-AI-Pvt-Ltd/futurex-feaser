@@ -11,11 +11,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 logger = logging.getLogger(__name__)
 
 from api.dependencies import enforce_api_rate_limit, get_db
+from api.input_validation import ensure_meaningful_text
 from core.database import settings, SessionLocal
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
@@ -120,6 +121,21 @@ def _paginate_query(query, *, limit: int, offset: int):
     return query.limit(page_size).offset(page_offset)
 
 
+def _transcript_metadata_response_loader():
+    return selectinload(LectureTranscriptAsset.metadata_entry).load_only(
+        LectureTranscriptMetadata.id,
+        LectureTranscriptMetadata.transcript_id,
+        LectureTranscriptMetadata.course_name,
+        LectureTranscriptMetadata.instructor_name,
+        LectureTranscriptMetadata.session_date,
+        LectureTranscriptMetadata.description,
+        LectureTranscriptMetadata.tags,
+        LectureTranscriptMetadata.storage_path,
+        LectureTranscriptMetadata.qdrant_collection_name,
+        LectureTranscriptMetadata.created_at,
+    )
+
+
 def _trim_qa_history(history: list[dict]) -> list[dict]:
     max_turns = max(1, settings.QA_MAX_STORED_TURNS)
     if len(history) <= max_turns:
@@ -211,6 +227,14 @@ def _is_lecture_chat_payload(payload: dict[str, Any]) -> bool:
     return "session_id" in payload and "message" in payload
 
 
+def _validate_feasibility_input(input_data: IdeaInput) -> None:
+    input_data.idea = ensure_meaningful_text(input_data.idea)
+
+    if not input_data.conversation_id:
+        input_data.ideal_customer = ensure_meaningful_text(input_data.ideal_customer)
+        input_data.problem_solved = ensure_meaningful_text(input_data.problem_solved)
+
+
 @ls_traceable(run_type="chain", name="handle_feasibility_chat", tags=["api", "feasibility"])
 async def _handle_feasibility_chat(
     input_data: IdeaInput,
@@ -250,6 +274,8 @@ async def _handle_feasibility_chat_stream(
     input_data: IdeaInput,
     background_tasks: BackgroundTasks,
 ):
+    _validate_feasibility_input(input_data)
+
     is_new_chat = True
     conv_id = input_data.conversation_id
 
@@ -462,13 +488,19 @@ def _handle_lecture_chat(
     if not request_data.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-    session = _get_or_create_lecture_session(db, request_data.session_id, request_data.author_id, request_data.transcript_id)
+    session = _get_or_create_lecture_session(
+        db,
+        request_data.session_id,
+        request_data.author_id,
+        request_data.transcript_id,
+    )
     transcript = None
-    if request_data.transcript_id is not None:
+    effective_transcript_id = request_data.transcript_id or session.transcript_id
+    if effective_transcript_id is not None:
         try:
             transcript = (
                 db.query(LectureTranscriptAsset)
-                .filter_by(id=request_data.transcript_id)
+                .filter_by(id=effective_transcript_id)
                 .first()
             )
         except SQLAlchemyError as exc:
@@ -478,6 +510,8 @@ def _handle_lecture_chat(
             ) from exc
         if not transcript:
             raise HTTPException(status_code=404, detail="Transcript not found.")
+        if session.transcript_id != transcript.id:
+            session.transcript_id = transcript.id
 
     history = _load_lecture_history(db, request_data.session_id)
     answer, sources, updated_memory_summary = run_chat_pipeline(
@@ -576,6 +610,9 @@ async def upload_transcript(
             tags=(tags or "").strip(),
             storage_path=object_path,
             qdrant_collection_name=settings.LECTURE_QDRANT_COLLECTION_NAME,
+            transcript_text=text,
+            transcript_summary=None,
+            summary_generated_at=None,
         )
         db.add(transcript_metadata)
 
@@ -747,11 +784,8 @@ async def engagement_reply_endpoint(
     db: Session = Depends(get_db),
 ):
     conv_id = input_data.conversation_id
-    founder_answer = (input_data.answer or "").strip()
+    founder_answer = ensure_meaningful_text(input_data.answer or "")
     engagement_question = (input_data.engagement_question or "").strip()
-
-    if not founder_answer:
-        raise HTTPException(status_code=400, detail="Answer cannot be empty.")
 
     sessions = _load_feasibility_conversation_messages(db, conv_id)
     if not sessions:
@@ -971,7 +1005,12 @@ def list_sessions(
 @router.patch("/transcripts/{transcript_id}", response_model=LectureTranscriptAssetOut, tags=["Transcript"])
 def update_transcript(transcript_id: int, payload: TranscriptUpdate, db: Session = Depends(get_db)):
     try:
-        transcript = db.query(LectureTranscriptAsset).filter_by(id=transcript_id).first()
+        transcript = (
+            db.query(LectureTranscriptAsset)
+            .options(_transcript_metadata_response_loader())
+            .filter_by(id=transcript_id)
+            .first()
+        )
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=500,
@@ -1000,8 +1039,12 @@ def update_transcript(transcript_id: int, payload: TranscriptUpdate, db: Session
             
     try:
         db.commit()
-        db.refresh(transcript)
-        return transcript
+        return (
+            db.query(LectureTranscriptAsset)
+            .options(_transcript_metadata_response_loader())
+            .filter_by(id=transcript_id)
+            .first()
+        )
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(status_code=500, detail="Database error while updating transcript.") from exc
@@ -1015,7 +1058,9 @@ def list_transcripts(
 ):
     try:
         return _paginate_query(
-            db.query(LectureTranscriptAsset).order_by(LectureTranscriptAsset.created_at.desc()),
+            db.query(LectureTranscriptAsset)
+            .options(_transcript_metadata_response_loader())
+            .order_by(LectureTranscriptAsset.created_at.desc()),
             limit=limit,
             offset=offset,
         ).all()
@@ -1071,6 +1116,20 @@ def reprocess_transcript(transcript_id: int, db: Session = Depends(get_db)):
 
         if transcript.metadata_entry:
             transcript.metadata_entry.qdrant_collection_name = new_collection_name
+            transcript.metadata_entry.transcript_text = cleaned_text
+            transcript.metadata_entry.transcript_summary = None
+            transcript.metadata_entry.summary_generated_at = None
+        else:
+            db.add(
+                LectureTranscriptMetadata(
+                    transcript_id=transcript.id,
+                    storage_path=transcript.object_path,
+                    qdrant_collection_name=new_collection_name,
+                    transcript_text=cleaned_text,
+                    transcript_summary=None,
+                    summary_generated_at=None,
+                )
+            )
 
         transcript.chunks_indexed = chunks_indexed
         _commit_or_500(db, "reprocess transcript")

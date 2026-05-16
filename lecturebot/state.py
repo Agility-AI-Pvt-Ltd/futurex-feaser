@@ -9,6 +9,7 @@ class ChatPipelineState(TypedDict):
     trace_id: NotRequired[str]
     memory_summary: NotRequired[str]
     conversation_relation: NotRequired[str]
+    answer_mode: NotRequired[str]
     relation_confidence: NotRequired[str]
     relation_reason: NotRequired[str]
     resolved_question: NotRequired[str]
@@ -26,4 +27,5 @@ class ChatPipelineState(TypedDict):
     relevance_confidence: NotRequired[str]
     relevance_reason: NotRequired[str]
     answer: NotRequired[str]
+    summary_cache_hit: NotRequired[bool]
     updated_memory_summary: NotRequired[str]
