@@ -79,7 +79,10 @@ async def lifespan(_app):
     try:
         from core.redis_client import verify_redis_connection
 
-        await verify_redis_connection()
+        if settings.redis_enabled:
+            await verify_redis_connection()
+        else:
+            print("Redis disabled; using database/in-memory fallbacks.")
     except Exception as e:
         print(f"ERROR: Redis startup check failed: {e}")
         if settings.REDIS_REQUIRED:

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     POSTGRES_URL: str = Field(default="")
 
     # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_ENABLED: bool = Field(default=False)
     REDIS_URL: str = Field(default="redis://localhost:6379")
     REDIS_REQUIRED: bool = Field(default=False)
 
@@ -95,6 +96,9 @@ class Settings(BaseSettings):
     API_MAX_PAGE_SIZE: int = Field(default=200)
     QDRANT_PATH: str = Field(default="/data/qdrant")
     QDRANT_FALLBACK_PATH: str = Field(default="qdrant_data")
+    QDRANT_BACKEND: str = Field(default="local")
+    QDRANT_CLOUD_URL: str = Field(default="")
+    QDRANT_CLOUD_API_KEY: str = Field(default="")
     RAG_LOG_CHUNK_CHARS: int = Field(default=400)
     RAG_RUN_LOG_DIR: str = Field(default="rag_run_logs")
 
@@ -159,6 +163,26 @@ class Settings(BaseSettings):
     @property
     def rag_run_log_dir(self) -> str:
         return self._resolve_path(self.RAG_RUN_LOG_DIR)
+
+    @property
+    def qdrant_backend(self) -> str:
+        raw = (self.QDRANT_BACKEND or "local").strip().lower()
+        if raw in {"none", "non", "off", "disabled", "disable", "false", "0"}:
+            return "none"
+        if raw in {"cloud", "remote"}:
+            return "cloud"
+        return "local"
+
+    @property
+    def qdrant_enabled(self) -> bool:
+        return self.qdrant_backend != "none"
+
+    @property
+    def redis_enabled(self) -> bool:
+        # QDRANT_BACKEND=none/non is the lightweight mode: no vector store and no Redis.
+        if self.qdrant_backend == "none":
+            return False
+        return bool(self.REDIS_ENABLED)
 
     def _resolve_path(self, path_value: str) -> str:
         raw_path = Path(path_value).expanduser()

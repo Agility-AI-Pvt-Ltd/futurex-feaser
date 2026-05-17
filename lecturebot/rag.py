@@ -30,6 +30,9 @@ def _default_collection_name() -> str:
 
 
 def get_embedding_model() -> TextEmbedding:
+    if not settings.qdrant_enabled:
+        raise RuntimeError("Qdrant is disabled because QDRANT_BACKEND=none.")
+
     global embedding_model
     if embedding_model is None:
         logger.info("embedding_model.load name=%s", settings.LECTURE_EMBEDDING_MODEL)
@@ -46,6 +49,9 @@ def get_qdrant_client() -> QdrantClient:
 
 
 def ensure_collection(collection_name: str | None = None) -> None:
+    if not settings.qdrant_enabled:
+        return
+
     collection_name = collection_name or _default_collection_name()
     qdrant_client = get_qdrant_client()
     existing = [
@@ -109,6 +115,10 @@ def index_transcript(
     *,
     collection_name: str | None = None,
 ) -> int:
+    if not settings.qdrant_enabled:
+        logger.info("lecture_rag.index_skipped qdrant_backend=none source=%s", source_name)
+        return 0
+
     if not text.strip():
         raise ValueError("Transcript text cannot be empty.")
 
@@ -184,6 +194,10 @@ def search_similar(
     object_path: str = "",
     collection_name: str | None = None,
 ) -> List[dict]:
+    if not settings.qdrant_enabled:
+        logger.info("lecture_rag.search_skipped qdrant_backend=none")
+        return []
+
     collection_name = collection_name or _default_collection_name()
     ensure_collection(collection_name)
     results = get_qdrant_client().query_points(
@@ -247,6 +261,9 @@ def delete_transcript_points(
     object_path: str = "",
     collection_name: str | None = None,
 ) -> None:
+    if not settings.qdrant_enabled:
+        return
+
     collection_name = collection_name or _default_collection_name()
     ensure_collection(collection_name)
     query_filter = _build_filter(
@@ -268,6 +285,9 @@ def create_shadow_collection_name(base_collection_name: str | None = None) -> st
 
 
 def delete_collection_if_exists(collection_name: str) -> None:
+    if not settings.qdrant_enabled:
+        return
+
     qdrant_client = get_qdrant_client()
     existing = {
         collection.name for collection in qdrant_client.get_collections().collections
@@ -285,6 +305,10 @@ def reindex_transcript_with_shadow_collection(
     object_path: str,
     active_collection_name: str | None = None,
 ) -> tuple[str, int]:
+    if not settings.qdrant_enabled:
+        logger.info("lecture_rag.reindex_skipped qdrant_backend=none transcript_id=%s", transcript_id)
+        return active_collection_name or _default_collection_name(), 0
+
     active_collection_name = active_collection_name or _default_collection_name()
     shadow_collection_name = create_shadow_collection_name(active_collection_name)
 

@@ -20,6 +20,10 @@ EMBEDDING_LOCAL_FILES_ONLY = os.getenv("EMBEDDING_LOCAL_FILES_ONLY", "").lower()
 
 def _init_qdrant(load_embedder: bool = True):
     global embedder, qdrant_client
+    if not settings.qdrant_enabled:
+        logger.info("Qdrant disabled; skipping RAG initialization.")
+        return
+
     if qdrant_client is None:
         try:
             from qdrant_client.models import VectorParams, Distance
@@ -67,10 +71,18 @@ def embed_conversation_context(conversation_id: str, search_results: str, analys
     configured BGE model, and inserts them into the local Qdrant collection
     under the given conversation_id.
     """
+    if not settings.qdrant_enabled:
+        logger.info("Skipping embedding because QDRANT_BACKEND=none.")
+        return
+
     try:
         _init_qdrant(load_embedder=True)
     except ImportError:
         logger.warning("Skipping embedding because required dependencies are not installed.")
+        return
+
+    if qdrant_client is None or embedder is None:
+        logger.info("Skipping embedding because Qdrant/embedder is unavailable.")
         return
         
     text_splitter = RecursiveCharacterTextSplitter(

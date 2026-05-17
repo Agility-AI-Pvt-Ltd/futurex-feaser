@@ -8,6 +8,10 @@ from core.storage_paths import resolve_writable_path
 _clients_by_path: dict[str, Any] = {}
 
 
+class QdrantDisabledError(RuntimeError):
+    pass
+
+
 def _resolve_writable_qdrant_path(path: str) -> str:
     return resolve_writable_path(
         path,
@@ -17,6 +21,23 @@ def _resolve_writable_qdrant_path(path: str) -> str:
 
 
 def get_local_qdrant_client(path: str | None = None) -> Any:
+    if not settings.qdrant_enabled:
+        raise QdrantDisabledError("Qdrant is disabled because QDRANT_BACKEND=none.")
+
+    if settings.qdrant_backend == "cloud":
+        key = "cloud"
+        if key not in _clients_by_path:
+            if not settings.QDRANT_CLOUD_URL.strip():
+                raise RuntimeError("QDRANT_CLOUD_URL is required when QDRANT_BACKEND=cloud.")
+
+            from qdrant_client import QdrantClient
+
+            _clients_by_path[key] = QdrantClient(
+                url=settings.QDRANT_CLOUD_URL.strip(),
+                api_key=settings.QDRANT_CLOUD_API_KEY.strip() or None,
+            )
+        return _clients_by_path[key]
+
     qdrant_path = _resolve_writable_qdrant_path(path or settings.qdrant_path)
     if qdrant_path not in _clients_by_path:
         from qdrant_client import QdrantClient

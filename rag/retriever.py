@@ -68,7 +68,7 @@ def conversation_chunk_count(conversation_id: str) -> int:
     Returns the number of persisted chunks for a conversation_id without
     requiring the embedding model to be loaded.
     """
-    if not conversation_id:
+    if not conversation_id or not settings.qdrant_enabled:
         return 0
 
     try:
@@ -129,6 +129,19 @@ def retrieve_context(conversation_id: str, query: str, top_k: int = 5) -> tuple[
         run_logger.write(f"requested_top_k: {top_k}")
         run_logger.write(f"retrieval_query: {query}")
         run_logger.write("")
+
+        if not settings.qdrant_enabled:
+            run_logger.section("RAG RETRIEVAL END")
+            run_logger.write("reason: qdrant_disabled")
+            log_event(
+                logger,
+                "rag_retrieval_skipped",
+                conversation_id=conversation_id,
+                retrieval_query=truncate_for_log(query, settings.RAG_LOG_CHUNK_CHARS),
+                reason="qdrant_disabled",
+                requested_top_k=top_k,
+            )
+            return "No relevant context found.", []
 
         if not conversation_id:
             run_logger.section("RAG RETRIEVAL END")

@@ -642,7 +642,11 @@ async def upload_transcript(
         ) from exc
 
     return UploadResponse(
-        message=f"Transcript '{transcript_name}' uploaded and indexed successfully.",
+        message=(
+            f"Transcript '{transcript_name}' uploaded and indexed successfully."
+            if chunks_indexed > 0
+            else f"Transcript '{transcript_name}' uploaded. Vector indexing is disabled."
+        ),
         chunks_indexed=chunks_indexed,
         session_name=session_name.strip(),
         source_name=transcript_name,

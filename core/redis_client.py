@@ -30,6 +30,8 @@ def _redact_redis_url(url: str) -> str:
 def get_redis():
     """Return an async Redis client, or None if redis package is not installed."""
     global _redis_client
+    if not settings.redis_enabled:
+        return None
     if not _REDIS_AVAILABLE:
         if settings.REDIS_REQUIRED:
             raise RuntimeError("redis[asyncio] is not installed, but REDIS_REQUIRED=true.")
@@ -46,6 +48,10 @@ def get_redis():
 
 
 async def verify_redis_connection() -> bool:
+    if not settings.redis_enabled:
+        logger.info("redis.disabled")
+        return False
+
     client = get_redis()
     if client is None:
         logger.warning("redis.unavailable package_missing=true")
