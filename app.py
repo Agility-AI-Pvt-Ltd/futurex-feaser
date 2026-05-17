@@ -25,7 +25,7 @@ configure_langsmith()
 
 
 def _initialize_database():
-    print("Starting up... initializing database")
+    print("Starting up... initializing databasee")
     try:
         from core.database import engine
 
