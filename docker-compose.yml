@@ -1,0 +1,23 @@
+services:
+  futurex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: futurex-app:latest
+    container_name: futurex
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "7860:7860"
+    volumes:
+      - futurex_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  futurex_data:
