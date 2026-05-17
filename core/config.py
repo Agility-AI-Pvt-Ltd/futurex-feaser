@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     LECTURE_TRANSCRIPT_STORAGE_PATH: str = Field(default="transcripts_data")
     LECTURE_QDRANT_COLLECTION_NAME: str = Field(default="lecture_transcripts")
     LECTURE_QDRANT_PATH: Optional[str] = Field(default=None)
-    LECTURE_EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
+    LECTURE_EMBEDDING_MODEL: str = Field(default="BAAI/bge-small-en-v1.5")
     LECTURE_VECTOR_SIZE: int = Field(default=384)
 
     @property

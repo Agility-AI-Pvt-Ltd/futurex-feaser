@@ -39,7 +39,12 @@ def _initialize_database():
 
 
 def _preload_runtime_models() -> None:
-    if settings.NOISE_REMOVER_ENABLED:
+    preload_noise_remover = os.getenv("PRELOAD_NOISE_REMOVER_ON_STARTUP", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if settings.NOISE_REMOVER_ENABLED and preload_noise_remover:
         print(f"Preloading noise-remover model: {settings.NOISE_REMOVER_MODEL}")
         try:
             from noiseremover.chunk_filter import preload_text_embedding_model
@@ -48,6 +53,8 @@ def _preload_runtime_models() -> None:
             print("Noise-remover FastEmbed model loaded.")
         except Exception as e:
             print(f"Noise-remover preload error: {e}")
+    elif settings.NOISE_REMOVER_ENABLED:
+        print("Noise-remover enabled; model will load lazily on first use.")
 
     preload_rag = os.getenv("PRELOAD_RAG_ON_STARTUP", "").lower() in {"1", "true", "yes"}
     if preload_rag:
