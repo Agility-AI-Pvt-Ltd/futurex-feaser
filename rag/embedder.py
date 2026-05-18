@@ -33,7 +33,7 @@ def _init_qdrant(load_embedder: bool = True):
             if not qdrant_client.collection_exists(COLLECTION_NAME):
                 qdrant_client.create_collection(
                     collection_name=COLLECTION_NAME,
-                    vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+                    vectors_config=VectorParams(size=384, distance=Distance.COSINE, on_disk=True),
                 )
         except ImportError as e:
             logger.error(f"Failed to initialize Qdrant. Please install requirements: {e}")

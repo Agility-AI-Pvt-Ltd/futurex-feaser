@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import logging
-import threading
 import asyncio
 from datetime import datetime, timedelta
-from collections import defaultdict, deque
-from time import time
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -15,32 +12,6 @@ from core.config import settings
 from core.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
-
-
-class InMemoryRateLimiter:
-    def __init__(self) -> None:
-        self._requests: dict[str, deque[float]] = defaultdict(deque)
-        self._lock = threading.Lock()
-
-    def check(self, key: str, *, limit: int, window_seconds: int) -> tuple[bool, int, int]:
-        now = time()
-        window_start = now - window_seconds
-
-        with self._lock:
-            timestamps = self._requests[key]
-            while timestamps and timestamps[0] <= window_start:
-                timestamps.popleft()
-
-            if len(timestamps) >= limit:
-                retry_after = max(1, int(timestamps[0] + window_seconds - now))
-                return False, retry_after, 0
-
-            timestamps.append(now)
-            remaining = max(0, limit - len(timestamps))
-            return True, 0, remaining
-
-
-in_memory_rate_limiter = InMemoryRateLimiter()
 
 
 def _extract_client_ip(request: Request) -> str:
@@ -206,21 +177,9 @@ async def check_api_rate_limit(key: str) -> tuple[bool, int, int]:
     if postgres_result is not None:
         return postgres_result
 
-    return in_memory_rate_limiter.check(
+    logger.warning(
+        "api_rate_limit.unavailable key=%s backend=redis_and_postgres action=allow_request",
         key,
-        limit=limit,
-        window_seconds=window_seconds,
     )
+    return True, 0, limit
 
-
-class AuthorRateLimiter:
-    def check(self, author_id: str) -> tuple[bool, int]:
-        allowed, retry_after, _remaining = in_memory_rate_limiter.check(
-            author_id,
-            limit=max(0, settings.LLM_RATE_LIMIT_REQUESTS),
-            window_seconds=max(1, settings.LLM_RATE_LIMIT_WINDOW_SECONDS),
-        )
-        return allowed, retry_after
-
-
-author_rate_limiter = AuthorRateLimiter()

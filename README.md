@@ -133,6 +133,44 @@ AXIOM_DATASET=...
 
 ---
 
+## Qdrant Vector Storage
+
+New Qdrant collections are created with `on_disk=True` in their `VectorParams`. This stores the raw vector data on disk instead of keeping all vectors resident in RAM. The HNSW graph index remains memory-resident, so RAM usage scales mostly with the index graph rather than the full vector matrix.
+
+Example estimate for 100k vectors with 384 dimensions:
+
+- Raw vectors: `100,000 x 384 x 4 bytes = about 153 MB` before Qdrant storage overhead.
+- HNSW index: roughly `num_vectors x 50-100 bytes`, so `100k x 100 bytes = about 10 MB`.
+- Practical result: much lower RAM pressure, with more data shifted to disk. Exact disk usage depends on Qdrant segment metadata, payload size, and optimizer settings.
+
+This setting applies when a collection is created. Existing Qdrant collections may need to be recreated or updated through Qdrant tooling before they use on-disk vector storage.
+
+---
+
+## 🧠 Redis Usage
+
+Redis is optional in this backend, but when `REDIS_ENABLED=true` it is used for the following runtime features:
+
+- **API rate limiting**: All routes on the main API router pass through a shared rate limiter. Redis stores counters under keys like `futurex:api-rate-limit:{identity}`.
+- **History response caching**: `GET /api/history?author_id=...` caches paginated conversation history in Redis for 60 seconds using keys like `idealab:history:{author_id}:{offset}:{limit}`.
+- **History cache invalidation**: After a feasibility conversation/report is updated, matching `idealab:history:{author_id}:*` cache keys are deleted so the next history fetch is fresh.
+- **Startup health check**: On app startup, the backend pings Redis and logs `redis.ping_ok` when the connection is healthy.
+- **Connection lifecycle**: A shared async Redis client is created lazily and closed during app shutdown.
+
+Fallback behavior when Redis is unavailable:
+
+- API rate limiting falls back to PostgreSQL.
+- History caching is skipped and the endpoint reads directly from PostgreSQL.
+
+If both Redis and PostgreSQL rate-limit backends are unavailable, the request is allowed and a warning is logged instead of using in-process RAM state.
+
+Redis is **not** used for:
+
+- Qdrant / vector search
+- Daily scrape usage limits (`AuthorDailyUsage` uses PostgreSQL)
+
+---
+
 ## 💻 Local Development
 
 1. **Create and activate venv:**

@@ -63,6 +63,7 @@ def ensure_collection(collection_name: str | None = None) -> None:
             vectors_config=VectorParams(
                 size=settings.LECTURE_VECTOR_SIZE,
                 distance=Distance.COSINE,
+                on_disk=True,
             ),
         )
         return
@@ -89,6 +90,7 @@ def ensure_collection(collection_name: str | None = None) -> None:
         vectors_config=VectorParams(
             size=settings.LECTURE_VECTOR_SIZE,
             distance=Distance.COSINE,
+            on_disk=True,
         ),
     )
 
