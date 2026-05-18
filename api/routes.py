@@ -43,7 +43,11 @@ from lecturebot.schemas import (
     TranscriptReprocessResponse,
     UploadResponse,
 )
-from lecturebot.storage import download_transcript_text, upload_transcript_bytes
+from lecturebot.storage import (
+    POSTGRES_STORAGE_BUCKET_NAME,
+    build_transcript_object_path,
+    download_transcript_text,
+)
 from lecturebot.transcript_converter import (
     clean_transcript_text,
     convert_transcript_to_text,
@@ -586,12 +590,8 @@ async def upload_transcript(
         chat_session = _get_or_create_lecture_session(db, chat_session_id.strip())
 
     try:
-        bucket_name, object_path = upload_transcript_bytes(
-            session_name=session_name,
-            file_name=file.filename,
-            file_bytes=file_bytes,
-            content_type=file.content_type,
-        )
+        bucket_name = POSTGRES_STORAGE_BUCKET_NAME
+        object_path = build_transcript_object_path(session_name, file.filename)
         transcript_asset = LectureTranscriptAsset(
             session_id=chat_session.session_id if chat_session else None,
             session_name=session_name.strip(),
@@ -1097,12 +1097,16 @@ def reprocess_transcript(transcript_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Transcript not found.")
 
     try:
-        raw_text = download_transcript_text(transcript.bucket_name, transcript.object_path)
-        file_type = transcript_file_type(transcript.file_name)
-        if file_type == "vtt":
-            cleaned_text = convert_transcript_to_text(transcript.file_name, raw_text)
+        metadata = transcript.metadata_entry
+        if metadata and metadata.transcript_text and metadata.transcript_text.strip():
+            cleaned_text = metadata.transcript_text.strip()
         else:
-            cleaned_text = clean_transcript_text(raw_text)
+            raw_text = download_transcript_text(transcript.bucket_name, transcript.object_path)
+            file_type = transcript_file_type(transcript.file_name)
+            if file_type == "vtt":
+                cleaned_text = convert_transcript_to_text(transcript.file_name, raw_text)
+            else:
+                cleaned_text = clean_transcript_text(raw_text)
 
         if not cleaned_text.strip():
             raise ValueError("Transcript is empty after preprocessing.")
@@ -1122,11 +1126,11 @@ def reprocess_transcript(transcript_id: int, db: Session = Depends(get_db)):
             active_collection_name=active_collection_name,
         )
 
-        if transcript.metadata_entry:
-            transcript.metadata_entry.qdrant_collection_name = new_collection_name
-            transcript.metadata_entry.transcript_text = cleaned_text
-            transcript.metadata_entry.transcript_summary = None
-            transcript.metadata_entry.summary_generated_at = None
+        if metadata:
+            metadata.qdrant_collection_name = new_collection_name
+            metadata.transcript_text = cleaned_text
+            metadata.transcript_summary = None
+            metadata.summary_generated_at = None
         else:
             db.add(
                 LectureTranscriptMetadata(

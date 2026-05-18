@@ -36,8 +36,25 @@ class LectureRelevanceGateTests(unittest.TestCase):
 
     def test_summary_intent_routes_around_rag(self):
         self.assertTrue(_looks_like_whole_transcript_summary_request("Give me a summary of it"))
+        self.assertTrue(
+            _looks_like_whole_transcript_summary_request(
+                "Give me a complete overview of this lecture"
+            )
+        )
+        self.assertTrue(
+            _looks_like_whole_transcript_summary_request("I want a summarization of this transcript")
+        )
+        self.assertFalse(
+            _looks_like_whole_transcript_summary_request("What is gradient descent in this lecture?")
+        )
         self.assertEqual(
             _fallback_question_analysis({"question": "Give me key points of this lecture"})[
+                "answer_mode"
+            ],
+            "whole_transcript_summary",
+        )
+        self.assertEqual(
+            _fallback_question_analysis({"question": "Give me a complete overview"})[
                 "answer_mode"
             ],
             "whole_transcript_summary",

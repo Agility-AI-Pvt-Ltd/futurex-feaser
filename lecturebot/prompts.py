@@ -142,9 +142,13 @@ def get_question_analysis_messages(
             content=(
                 "Analyze whether the user's latest message depends on earlier conversation. "
                 "Reason silently and return only valid JSON. "
-                "If the user is continuing or clarifying, rewrite it into a self-contained question."
+                "If the user is continuing or clarifying, rewrite it into a self-contained question. "
+                "Prioritize the user's latest message over older history when deciding answer_mode. "
+                "Only choose whole_transcript_summary if the latest user message itself clearly asks for "
+                "a summary, summarization, recap, notes, complete overview, or what the whole lecture/transcript is about. "
                 " Set answer_mode='whole_transcript_summary' when the user asks for an overview, "
-                "summary, recap, main points, key points, notes, gist, or asks what the whole lecture/transcript is about. "
+                "summary, summarization, recap, main points, key points, notes, gist, complete overview, "
+                "or asks what the whole lecture/transcript is about. "
                 "Use answer_mode='rag' for specific factual questions that should be answered from relevant transcript chunks."
             )
         ),

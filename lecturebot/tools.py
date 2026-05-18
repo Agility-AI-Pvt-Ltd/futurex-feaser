@@ -32,6 +32,7 @@ RELEVANCE_REFUSAL = (
 SUMMARY_INTENT_TERMS = {
     "summary",
     "summarize",
+    "summarization",
     "summarise",
     "overview",
     "recap",
@@ -44,6 +45,9 @@ SUMMARY_INTENT_TERMS = {
     "lecture notes",
     "short notes",
     "study notes",
+    "complete overview",
+    "full overview",
+    "overall summary",
 }
 WHOLE_TRANSCRIPT_TERMS = {
     "it",
@@ -178,10 +182,7 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
         result = _fallback_question_analysis(state)
     if result.get("answer_mode") not in {RAG_ANSWER_MODE, WHOLE_TRANSCRIPT_SUMMARY_MODE}:
         result["answer_mode"] = RAG_ANSWER_MODE
-    if _looks_like_whole_transcript_summary_request(
-        state["question"],
-        result.get("resolved_question", ""),
-    ):
+    if _looks_like_whole_transcript_summary_request(state["question"]):
         result["answer_mode"] = WHOLE_TRANSCRIPT_SUMMARY_MODE
     return result
 

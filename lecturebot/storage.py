@@ -11,6 +11,7 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 LOCAL_STORAGE_BUCKET_NAME = "local"
+POSTGRES_STORAGE_BUCKET_NAME = "postgres"
 
 
 def slugify_path_segment(value: str) -> str:
