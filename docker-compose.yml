@@ -18,9 +18,9 @@ services:
     env_file:
       - .env
     environment:
-      QDRANT_BACKEND: cloud
-      QDRANT_CLOUD_URL: http://qdrant:6333
-      QDRANT_CLOUD_API_KEY: ""
+      QDRANT_BACKEND: remote
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ""
     ports:
       - "7860:7860"
     volumes:

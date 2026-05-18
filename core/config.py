@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     QDRANT_PATH: str = Field(default="/data/qdrant")
     QDRANT_FALLBACK_PATH: str = Field(default="qdrant_data")
     QDRANT_BACKEND: str = Field(default="local")
+    QDRANT_URL: str = Field(default="")
+    QDRANT_API_KEY: str = Field(default="")
     QDRANT_CLOUD_URL: str = Field(default="")
     QDRANT_CLOUD_API_KEY: str = Field(default="")
     RAG_LOG_CHUNK_CHARS: int = Field(default=400)
@@ -169,8 +171,8 @@ class Settings(BaseSettings):
         raw = (self.QDRANT_BACKEND or "local").strip().lower()
         if raw in {"none", "non", "off", "disabled", "disable", "false", "0"}:
             return "none"
-        if raw in {"cloud", "remote"}:
-            return "cloud"
+        if raw in {"remote", "server", "url", "cloud"}:
+            return "remote"
         return "local"
 
     @property

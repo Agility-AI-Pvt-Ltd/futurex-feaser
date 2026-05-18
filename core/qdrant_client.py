@@ -24,17 +24,21 @@ def get_local_qdrant_client(path: str | None = None) -> Any:
     if not settings.qdrant_enabled:
         raise QdrantDisabledError("Qdrant is disabled because QDRANT_BACKEND=none.")
 
-    if settings.qdrant_backend == "cloud":
-        key = "cloud"
+    if settings.qdrant_backend == "remote":
+        key = "remote"
         if key not in _clients_by_path:
-            if not settings.QDRANT_CLOUD_URL.strip():
-                raise RuntimeError("QDRANT_CLOUD_URL is required when QDRANT_BACKEND=cloud.")
+            endpoint_url = settings.QDRANT_URL.strip() or settings.QDRANT_CLOUD_URL.strip()
+            if not endpoint_url:
+                raise RuntimeError(
+                    "QDRANT_URL or QDRANT_CLOUD_URL is required when QDRANT_BACKEND=remote."
+                )
+            api_key = settings.QDRANT_API_KEY.strip() or settings.QDRANT_CLOUD_API_KEY.strip() or None
 
             from qdrant_client import QdrantClient
 
             _clients_by_path[key] = QdrantClient(
-                url=settings.QDRANT_CLOUD_URL.strip(),
-                api_key=settings.QDRANT_CLOUD_API_KEY.strip() or None,
+                url=endpoint_url,
+                api_key=api_key,
             )
         return _clients_by_path[key]
 
