@@ -18,6 +18,11 @@ jobs:
         run: |
           docker build -t futurex-app .
 
+      - name: Validate Docker Compose stack
+        run: |
+          docker compose config --services
+          docker compose build qdrant-backup
+
       - name: Run container (smoke test)
         run: |
           if [ -z "${{ secrets.POSTGRES_URL }}" ]; then

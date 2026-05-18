@@ -1,4 +1,13 @@
 services:
+  qdrant:
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:latest}
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
   futurex:
     build:
       context: .
@@ -8,10 +17,16 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      QDRANT_BACKEND: cloud
+      QDRANT_CLOUD_URL: http://qdrant:6333
+      QDRANT_CLOUD_API_KEY: ""
     ports:
       - "7860:7860"
     volumes:
       - futurex_data:/data
+    depends_on:
+      - qdrant
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/', timeout=5)"]
       interval: 30s
@@ -19,5 +34,24 @@ services:
       retries: 3
       start_period: 30s
 
+  qdrant-backup:
+    build:
+      context: ./backup
+      dockerfile: Dockerfile
+    image: futurex-qdrant-backup:latest
+    container_name: qdrant-backup
+    restart: unless-stopped
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      GCS_BUCKET_NAME: ${GCS_BUCKET_NAME:-}
+      GCS_ACCESS_KEY_ID: ${GCS_ACCESS_KEY_ID:-}
+      GCS_SECRET_ACCESS_KEY: ${GCS_SECRET_ACCESS_KEY:-}
+      BACKUP_CRON: ${BACKUP_CRON:-0 2 * * *}
+      GCS_BACKUP_PREFIX: ${GCS_BACKUP_PREFIX:-qdrant/full-node}
+      RUN_BACKUP_ON_STARTUP: ${RUN_BACKUP_ON_STARTUP:-false}
+    depends_on:
+      - qdrant
+
 volumes:
   futurex_data:
+  qdrant_storage:

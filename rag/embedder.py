@@ -10,13 +10,15 @@ from core.qdrant_client import close_qdrant_clients, get_local_qdrant_client
 # Try to get the logger, if not, it will be standard
 logger = get_logger(__name__)
 
+
 # Lazy initialization so the app doesn't crash if imported before pip install
 embedder = None
 qdrant_client = None
 QDRANT_PATH = settings.qdrant_path
 COLLECTION_NAME = "feasibility_context"
+BATCH_SIZE = 50
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-en-v1.5")
-EMBEDDING_LOCAL_FILES_ONLY = os.getenv("EMBEDDING_LOCAL_FILES_ONLY", "").lower() in {"1", "true", "yes"}
+EMBEDDING_LOCAL_FILES_ONLY = os.getenv("EMBEDDI2NG_LOCAL_FILES_ONLY", "").lower() in {"1", "true", "yes"}
 
 def _init_qdrant(load_embedder: bool = True):
     global embedder, qdrant_client
@@ -53,7 +55,6 @@ def _init_qdrant(load_embedder: bool = True):
         except Exception as e:
             logger.error(f"Failed to initialize fastembed: {e}")
             raise
-
 
 def close_qdrant():
     global qdrant_client
@@ -153,38 +154,46 @@ def embed_conversation_context(conversation_id: str, search_results: str, analys
     
     print(f"\n  [RAG] 🧠 Generating embeddings for {len(chunks)} text chunks (Background Thread)...")
 
-    # Generate vectors and upload to Qdrant
+    # Generate vectors and upload to Qdrant in small batches so on-disk Qdrant
+    # storage is not undermined by materializing all embeddings in RAM first.
     try:
         from qdrant_client.models import PointStruct
         import uuid
-        
-        vectors = list(embedder.embed(texts))
-        points = [
-            PointStruct(
-                id=str(uuid.uuid4()),
-                vector=vector.tolist(),
-                payload=meta
+
+        embedded_count = 0
+        for start in range(0, len(chunks), BATCH_SIZE):
+            batch_texts = texts[start : start + BATCH_SIZE]
+            batch_metadatas = metadatas[start : start + BATCH_SIZE]
+            batch_vectors = list(embedder.embed(batch_texts))
+            points = [
+                PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vector.tolist(),
+                    payload=meta
+                )
+                for vector, meta in zip(batch_vectors, batch_metadatas)
+            ]
+
+            qdrant_client.upsert(
+                collection_name=COLLECTION_NAME,
+                points=points,
+                wait=True
             )
-            for vector, meta in zip(vectors, metadatas)
-        ]
-        
-        qdrant_client.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points,
-            wait=True
-        )
-        logger.info(f"Successfully embedded {len(points)} chunks for conversation {conversation_id}")
+            embedded_count += len(points)
+
+        logger.info(f"Successfully embedded {embedded_count} chunks for conversation {conversation_id}")
         log_event(
             logger,
             "rag_embedding_complete",
             conversation_id=conversation_id,
             collection_name=COLLECTION_NAME,
-            embedded_chunk_count=len(points),
+            embedded_chunk_count=embedded_count,
             web_research_chunk_count=source_counts["web_research"],
             feasibility_report_chunk_count=source_counts["feasibility_report"],
             embedding_model=EMBEDDING_MODEL_NAME,
+            batch_size=BATCH_SIZE,
         )
-        print(f"  [RAG] ✅ Successfully uploaded {len(points)} chunks to Qdrant for Session {conversation_id}...\n")
+        print(f"  [RAG] ✅ Successfully uploaded {embedded_count} chunks to Qdrant for Session {conversation_id}...\n")
     except Exception as e:
         log_exception(
             logger,
@@ -198,3 +207,13 @@ def embed_conversation_context(conversation_id: str, search_results: str, analys
             error=str(e),
         )
         print(f"  [RAG] ❌ Failed to embed context: {e}")
+
+
+
+
+
+
+
+
+
+
