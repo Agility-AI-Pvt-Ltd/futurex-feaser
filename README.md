@@ -107,7 +107,11 @@ FASTEMBED_CACHE_DIR=/data/cache/fastembed
 FASTEMBED_FALLBACK_CACHE_DIR=fastembed_cache
 RAG_LOG_CHUNK_CHARS=400
 QDRANT_COLLECTION_NAME=transcripts
-QDRANT_BACKEND=cloud
+# Use `remote` for a self-hosted/local Qdrant server reachable by URL.
+# Use `local` only for embedded on-disk Qdrant inside the app process.
+QDRANT_BACKEND=remote
+QDRANT_URL=http://127.0.0.1:6333
+QDRANT_API_KEY=
 QDRANT_CLOUD_URL=
 QDRANT_CLOUD_API_KEY=
 QDRANT_PATH=/data/qdrant
@@ -144,6 +148,57 @@ Example estimate for 100k vectors with 384 dimensions:
 - Practical result: much lower RAM pressure, with more data shifted to disk. Exact disk usage depends on Qdrant segment metadata, payload size, and optimizer settings.
 
 This setting applies when a collection is created. Existing Qdrant collections may need to be recreated or updated through Qdrant tooling before they use on-disk vector storage.
+
+---
+
+## Qdrant Backups
+
+This repo supports full-node backups for a self-hosted single-node Qdrant service running in Docker Compose.
+
+- `qdrant` stores the live vector data
+- `qdrant-backup` is a sidecar that runs `cron`
+- `backup/backup.sh` calls `POST /snapshots` on the local Qdrant node
+- the snapshot is downloaded, gzipped, and uploaded to GCS
+
+Relevant environment variables:
+
+- `GCS_BUCKET_NAME`
+- `GCS_ACCESS_KEY_ID`
+- `GCS_SECRET_ACCESS_KEY`
+- `GCS_BACKUP_PREFIX`
+- `BACKUP_CRON`
+- `RUN_BACKUP_ON_STARTUP`
+
+The current backup path is for self-hosted/local Qdrant. It is not the same as Qdrant Cloud managed backups.
+
+### Restore From GCS
+
+To restore the latest Qdrant full-node snapshot from GCS back into the local Docker Qdrant volume, run:
+
+```bash
+./backup/restore_from_gcs.sh
+```
+
+To restore a specific snapshot object instead of the latest one:
+
+```bash
+./backup/restore_from_gcs.sh "qdrant/full-node/<snapshot-file>.snapshot.gz"
+```
+
+The restore script will:
+
+- find or use the requested snapshot key
+- download it from GCS
+- extract the `.snapshot`
+- stop the running app/Qdrant services
+- restore the full Qdrant storage snapshot
+- start the normal services again
+
+Important notes:
+
+- This restore flow is intended for a self-hosted single-node Qdrant setup.
+- It restores the whole local Qdrant storage state, not just one collection.
+- Idea Lab and Lecturebot data are both included if both collections exist in that local Qdrant node.
 
 ---
 
