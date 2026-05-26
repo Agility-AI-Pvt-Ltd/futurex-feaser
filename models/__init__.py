@@ -8,6 +8,9 @@ from models.conversation import (
     LectureMessage,
     LectureTranscriptAsset,
     LectureTranscriptMetadata,
+    ProjectReviewCodeArtifact,
+    ProjectReviewReport,
+    ProjectReviewSubmission,
 )
 
 __all__ = [
@@ -20,4 +23,7 @@ __all__ = [
     "LectureMessage",
     "LectureTranscriptAsset",
     "LectureTranscriptMetadata",
+    "ProjectReviewCodeArtifact",
+    "ProjectReviewReport",
+    "ProjectReviewSubmission",
 ]

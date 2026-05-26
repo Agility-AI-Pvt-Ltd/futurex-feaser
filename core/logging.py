@@ -85,7 +85,7 @@ def log_exception(logger: logging.Logger, message: str, **fields: Any) -> None:
 def sanitize_headers(headers: Any) -> dict[str, str]:
     redacted_headers = {}
     for key, value in headers.items():
-        if key.lower() in {"authorization", "cookie", "set-cookie", "x-api-key"}:
+        if key.lower() in {"authorization", "cookie", "set-cookie", "x-api-key", "x-github-token"}:
             redacted_headers[key] = "[REDACTED]"
         else:
             redacted_headers[key] = value

@@ -121,12 +121,32 @@ class Settings(BaseSettings):
     LECTURE_EMBEDDING_MODEL: str = Field(default="BAAI/bge-small-en-v1.5")
     LECTURE_VECTOR_SIZE: int = Field(default=384)
 
+    # ── Project Reviewer / Industry Readiness Evaluator ────────────────────
+    PROJECT_REVIEWER_STORAGE_BACKEND: str = Field(default="local")
+    PROJECT_REVIEWER_STORAGE_PATH: str = Field(default="project_reviewer_data")
+    PROJECT_REVIEWER_GCS_BUCKET_NAME: str = Field(default="")
+    PROJECT_REVIEWER_GCS_PREFIX: str = Field(default="project-reviewer/code")
+    PROJECT_REVIEWER_WORKDIR: str = Field(default="project_reviewer_workdir")
+    PROJECT_REVIEWER_MAX_FILES: int = Field(default=350)
+    PROJECT_REVIEWER_MAX_FILE_BYTES: int = Field(default=250_000)
+    PROJECT_REVIEWER_MAX_CONTEXT_CHARS: int = Field(default=80_000)
+    PROJECT_REVIEWER_GIT_TIMEOUT_SECONDS: int = Field(default=45)
+    PROJECT_REVIEWER_RUNTIME_SANDBOX_ENABLED: bool = Field(default=False)
+
     @property
     def lecture_transcript_storage_path(self) -> str:
         raw_path = Path(self.LECTURE_TRANSCRIPT_STORAGE_PATH).expanduser()
         if raw_path.is_absolute():
             return str(raw_path)
         return str((BASE_DIR / raw_path).resolve())
+
+    @property
+    def project_reviewer_storage_path(self) -> str:
+        return self._resolve_path(self.PROJECT_REVIEWER_STORAGE_PATH)
+
+    @property
+    def project_reviewer_workdir(self) -> str:
+        return self._resolve_path(self.PROJECT_REVIEWER_WORKDIR)
 
     @property
     def lecture_qdrant_path(self) -> str:

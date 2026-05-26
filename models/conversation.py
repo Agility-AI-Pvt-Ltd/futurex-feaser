@@ -186,3 +186,75 @@ class LectureTranscriptMetadata(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     transcript = relationship("LectureTranscriptAsset", back_populates="metadata_entry")
+
+
+class ProjectReviewSubmission(Base):
+    __tablename__ = "project_review_submissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    author_id = Column(String, index=True, nullable=True)
+    source_type = Column(String, nullable=False)
+    github_url = Column(Text, nullable=True)
+    selected_repo = Column(Text, nullable=True)
+    storage_backend = Column(String, nullable=True)
+    storage_bucket = Column(String, nullable=True)
+    storage_object_path = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="queued", index=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.datetime.utcnow,
+        onupdate=datetime.datetime.utcnow,
+        nullable=False,
+    )
+
+    report = relationship(
+        "ProjectReviewReport",
+        back_populates="submission",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    artifacts = relationship(
+        "ProjectReviewCodeArtifact",
+        back_populates="submission",
+        cascade="all, delete-orphan",
+    )
+
+
+class ProjectReviewCodeArtifact(Base):
+    __tablename__ = "project_review_code_artifacts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    submission_id = Column(Integer, ForeignKey("project_review_submissions.id"), nullable=False, index=True)
+    artifact_type = Column(String, nullable=False, default="source_archive")
+    storage_backend = Column(String, nullable=False)
+    bucket_name = Column(String, nullable=True)
+    object_path = Column(Text, nullable=False)
+    file_count = Column(Integer, nullable=False, default=0)
+    total_bytes = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    submission = relationship("ProjectReviewSubmission", back_populates="artifacts")
+
+
+class ProjectReviewReport(Base):
+    __tablename__ = "project_review_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    submission_id = Column(Integer, ForeignKey("project_review_submissions.id"), nullable=False, unique=True, index=True)
+    overall_score = Column(Integer, nullable=False, default=0)
+    readiness_level = Column(String, nullable=False, default="unknown")
+    seniority_estimate = Column(String, nullable=False, default="unknown")
+    would_pass_strong_review = Column(Boolean, nullable=False, default=False)
+    summary = Column(Text, nullable=False, default="")
+    category_scores = Column(JSON, nullable=False, default=dict)
+    findings = Column(JSON, nullable=False, default=list)
+    strengths = Column(JSON, nullable=False, default=list)
+    improvement_roadmap = Column(JSON, nullable=False, default=list)
+    static_analysis = Column(JSON, nullable=False, default=dict)
+    llm_analysis = Column(JSON, nullable=False, default=dict)
+    graph_trace = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    submission = relationship("ProjectReviewSubmission", back_populates="report")

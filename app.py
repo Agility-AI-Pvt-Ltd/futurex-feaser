@@ -19,6 +19,7 @@ from core.logging import (
     sanitize_headers,
 )
 from core.observability import configure_langsmith, ls_tracing_context
+from project_reviewer.routes import router as project_reviewer_router
 
 logger = configure_logging().getChild("http")
 configure_langsmith()
@@ -222,6 +223,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(router, prefix="/api")
+app.include_router(project_reviewer_router, prefix="/api")
 
 # ── Health Check ──────────────────────────────────────────────────────────────
 @app.get("/")
