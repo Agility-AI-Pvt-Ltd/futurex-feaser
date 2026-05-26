@@ -6,7 +6,7 @@ import uuid
 from json import JSONDecodeError
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -117,6 +117,13 @@ class EngagementReplyInput(BaseModel):
 
 class EngagementReplyResponse(BaseModel):
     answer: str
+
+
+def _require_non_empty(value: str, field_name: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required.")
+    return cleaned
 
 
 def _paginate_query(query, *, limit: int, offset: int):
@@ -843,6 +850,46 @@ async def engagement_reply_endpoint(
     db.commit()
 
     return EngagementReplyResponse(answer=reply)
+
+
+@router.get("/feasibility-reports/{conversation_id}/score", response_model=str, tags=["Feasibility"])
+def get_feasibility_report_score(
+    conversation_id: str,
+    author_id: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+) -> str:
+    conv_id = _require_non_empty(conversation_id, "conversation_id")
+    owner_id = _require_non_empty(author_id, "author_id")
+
+    try:
+        owned_conversation = (
+            db.query(ChatSession.id)
+            .filter(
+                ChatSession.conversation_id == conv_id,
+                ChatSession.authorId == owner_id,
+            )
+            .first()
+        )
+        if not owned_conversation:
+            raise HTTPException(status_code=404, detail="Feasibility report not found.")
+
+        score_row = (
+            db.query(FeasibilityReport.score)
+            .filter(FeasibilityReport.conversation_id == conv_id)
+            .first()
+        )
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Database error while loading feasibility report score.",
+        ) from exc
+
+    if score_row is None or score_row.score is None:
+        raise HTTPException(status_code=404, detail="Feasibility report not found.")
+
+    return score_row.score
 
 
 @router.get("/history")
