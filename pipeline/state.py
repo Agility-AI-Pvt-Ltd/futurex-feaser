@@ -39,3 +39,6 @@ class AgentState(TypedDict):
     qa_summary: NotRequired[str]          # LLM-compressed summary of older turns
     on_log: NotRequired[Any]              # Optional callback for real-time logging
     on_scrape_event: NotRequired[Any]     # Optional callback for structured URL scrape events
+    should_refine: NotRequired[bool]      # True if the report needs to be updated based on Q&A
+    refinement_reason: NotRequired[str]   # Explanation for why refinement was triggered/skipped
+

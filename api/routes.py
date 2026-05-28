@@ -107,6 +107,8 @@ class QaResponse(BaseModel):
     answer: str
     top_chunks: Optional[list[dict]] = None
     trace: Optional[list[dict]] = None
+    analysis: Optional[str] = None
+
 
 
 class EngagementReplyInput(BaseModel):
@@ -760,6 +762,7 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
             "qa_summary": qa_summary,
         }
 
+        original_analysis = state_model.analysis or ""
         result = await qa_langgraph_app.ainvoke(initial_state)
         answer = result.get("qa_answer") or "I couldn't generate an answer right now."
         chunks = result.get("top_chunks", [])
@@ -768,21 +771,67 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
         new_full_history = _trim_qa_history(full_qa_history + [{"q": question, "a": answer}])
         state_model.qa_history = new_full_history
         state_model.qa_summary = result.get("qa_summary", qa_summary)
+
+        # Check if the feasibility report got refined
+        new_analysis = result.get("analysis")
+        refined_analysis_returned = None
+        if new_analysis and new_analysis != original_analysis:
+            state_model.analysis = new_analysis
+            refined_analysis_returned = new_analysis
+            try:
+                data = parse_feasibility_report(new_analysis)
+                report = (
+                    db.query(FeasibilityReport)
+                    .filter(FeasibilityReport.conversation_id == conv_id)
+                    .first()
+                )
+                if not report:
+                    report = FeasibilityReport(conversation_id=conv_id)
+                    db.add(report)
+
+                report.chain_of_thought = data.get("chain_of_thought")
+                report.idea_fit = data.get("idea_fit")
+                report.competitors = data.get("competitors")
+                report.opportunity = data.get("opportunity")
+                report.score = data.get("score")
+                report.targeting = data.get("targeting")
+                report.next_step = data.get("next_step")
+                logging.info("[QA Refinement] Successfully refined feasibility report for conv=%s", conv_id)
+            except ValueError as exc:
+                logging.warning(
+                    "[QA Refinement] Refined LLM analysis output was not valid JSON for conversation %s: %s",
+                    conv_id,
+                    exc,
+                )
+
         db.commit()
 
+        # Cache invalidation
+        _inv_redis = get_redis()
+        if _inv_redis is not None and refined_analysis_returned:
+            try:
+                pattern = f"idealab:history:{first_session.authorId}:*"
+                keys = await _inv_redis.keys(pattern)
+                if keys:
+                    await _inv_redis.delete(*keys)
+            except Exception as exc:
+                logger.warning("Redis cache invalidation failed: %s", exc)
+
         logging.info(
-            "[QA Memory] conv=%s total_turns=%s summary_len=%s",
+            "[QA Memory] conv=%s total_turns=%s summary_len=%s refined=%s",
             conv_id,
             len(new_full_history),
             len(state_model.qa_summary or ""),
+            refined_analysis_returned is not None,
         )
     except Exception as exc:
         logging.error("Error during QA LLM call: %s", exc)
         answer = "I'm sorry, I encountered an error while trying to answer your question."
         chunks = []
         trace = [{"step": "qa_error", "message": str(exc)}]
+        refined_analysis_returned = None
 
-    return QaResponse(answer=answer, top_chunks=chunks, trace=trace)
+    return QaResponse(answer=answer, top_chunks=chunks, trace=trace, analysis=refined_analysis_returned)
 
 
 @ls_traceable(run_type="chain", name="engagement_reply_endpoint", tags=["api", "engagement"])

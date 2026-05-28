@@ -11,16 +11,21 @@ Memory:
 """
 
 from datetime import datetime, timezone
+import json
 from typing import Any
 from langgraph.graph import StateGraph, START, END
 
 from core.config import settings
 from core.logging import get_logger, log_event
+from core.json_utils import parse_json_from_text
 from pipeline.state import AgentState
 from pipeline.prompts.qa import get_qa_prompt
+from pipeline.tools import FeasibilityReportSchema
+from pipeline.feasibility_parser import parse_feasibility_report
 from rag.retriever import conversation_chunk_count, retrieve_context
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
+
 
 
 # ── Memory constants ───────────────────────────────────────────────────────────
@@ -343,13 +348,129 @@ def qa_generate_answer_node(state: AgentState, llm) -> dict:
     return {"qa_answer": _extract_llm_content(response), "trace": trace}
 
 
+def qa_check_refinement_needed_node(state: AgentState, llm) -> dict:
+    """
+    Lightweight LLM gate to check if the latest user question + assistant answer contains
+    new insights or pivot decisions that warrant updating the feasibility report.
+    """
+    print("--- QA NODE: qa_check_refinement_needed_node ---")
+    question = state.get("question", "").strip()
+    answer = state.get("qa_answer", "").strip()
+    analysis = state.get("analysis", "").strip()
+
+    if not analysis or not question or not answer:
+        return {"should_refine": False, "refinement_reason": "Missing inputs."}
+
+    prompt = (
+        "You are an AI startup analyst evaluating if a conversation turn changes a startup's feasibility analysis.\n"
+        "Analyze the following conversation turn between a founder and a startup advisor:\n\n"
+        f"Founder: {question}\n"
+        f"Advisor: {answer}\n\n"
+        "Original Feasibility Report summary keys/data:\n"
+        f"{analysis[:1500]}\n\n"
+        "Task:\n"
+        "Determine if the founder provided new concrete facts, target audience shifts, strategic pivots, "
+        "competitor observations, or decisions that modify the core assumptions, next steps, or the feasibility score of the original report.\n"
+        "If the user is just asking generic questions, saying thank you, or no new concrete data is added, output False.\n"
+        "Return a JSON object with two fields:\n"
+        "1. \"should_refine\": boolean (true or false)\n"
+        "2. \"reason\": string (brief explanation of why)\n\n"
+        "JSON Response:"
+    )
+
+    try:
+        response = llm.invoke(prompt)
+        content = _extract_llm_content(response)
+        parsed = parse_json_from_text(content, expected_type=dict)
+        should_refine = bool(parsed.get("should_refine", False))
+        reason = str(parsed.get("reason", "No reason provided."))
+        print(f"  [Refinement Gate] should_refine: {should_refine}. Reason: {reason}")
+    except Exception as e:
+        logger.warning("qa_check_refinement_needed failed: %s", e)
+        should_refine = False
+        reason = f"Error in gate: {e}"
+
+    trace = _append_trace(
+        state,
+        "qa_check_refinement_needed",
+        f"Evaluated refinement gate. decision={should_refine}",
+        {"should_refine": should_refine, "reason": reason},
+    )
+    return {"should_refine": should_refine, "refinement_reason": reason, "trace": trace}
+
+
+def qa_refine_report_node(state: AgentState, llm) -> dict:
+    """
+    Regenerates the feasibility report incorporating the new Q&A discussion insights.
+    """
+    print("--- QA NODE: qa_refine_report_node ---")
+    question = state.get("question", "")
+    answer = state.get("qa_answer", "")
+    original_analysis = state.get("analysis", "")
+    idea = state.get("idea", "the startup idea")
+
+    prompt = (
+        "You are an elite startup analysis agent. Refine the existing feasibility report of the startup idea based on the new Q&A turn.\n\n"
+        f"Startup Idea: {idea}\n\n"
+        f"=== ORIGINAL FEASIBILITY REPORT ===\n"
+        f"{original_analysis}\n"
+        "====================================\n\n"
+        f"=== NEW DISCUSSION TURN ===\n"
+        f"Founder: {question}\n"
+        f"Advisor: {answer}\n"
+        "============================\n\n"
+        "Instructions:\n"
+        "1. Incorporate the new discussion points (corrections, choices, competitor details) into the appropriate section(s) of the feasibility report.\n"
+        "2. If the new information affects the feasibility score (e.g. risk reduced or target user clarified), adjust the \"score\" field accordingly (e.g. '7/10', '8/10').\n"
+        "3. Keep all other unchanged details in the report intact.\n"
+        "4. Your response must be in valid JSON conforming to the requested schema.\n"
+    )
+
+    try:
+        if hasattr(llm, "with_structured_output"):
+            structured_llm = llm.with_structured_output(FeasibilityReportSchema)
+            response = structured_llm.invoke(prompt)
+            if isinstance(response, FeasibilityReportSchema):
+                refined = response.model_dump_json()
+                logger.info("qa_refine_report.structured_output_success")
+                trace = _append_trace(state, "qa_refine_report", "Successfully refined report structure.", {"refined": True})
+                return {"analysis": refined, "trace": trace}
+            elif isinstance(response, dict):
+                refined = json.dumps(response, ensure_ascii=False)
+                logger.info("qa_refine_report.structured_output_dict_success")
+                trace = _append_trace(state, "qa_refine_report", "Successfully refined report (dict).", {"refined": True})
+                return {"analysis": refined, "trace": trace}
+    except Exception as exc:
+        logger.warning("qa_refine_report structured output failed: %s. Falling back to text.", exc)
+
+    try:
+        response = llm.invoke(prompt)
+        content = _extract_llm_content(response)
+        refined = json.dumps(parse_feasibility_report(content), ensure_ascii=False)
+        trace = _append_trace(state, "qa_refine_report", "Refined report using fallback text generation.", {"refined": True, "fallback": True})
+        return {"analysis": refined, "trace": trace}
+    except Exception as exc:
+        logger.error("qa_refine_report fallback failed: %s", exc)
+        trace = _append_trace(state, "qa_refine_report", f"Failed to refine report: {exc}", {"refined": False, "error": str(exc)})
+        return {"trace": trace}
+
+
+def route_refinement(state: AgentState) -> str:
+    if state.get("should_refine", False):
+        print("--- QA ROUTER: Routing to qa_refine_report ---")
+        return "refine"
+    print("--- QA ROUTER: Routing to END ---")
+    return "skip"
+
+
 # ── Graph wiring ───────────────────────────────────────────────────────────────
-def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None):
+def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None, refine_llm=None):
     qa_workflow = StateGraph(AgentState)
 
     memory_llm = memory_llm or get_llm(temperature=0.2)
     rewrite_llm = rewrite_llm or get_llm(temperature=0.2)
     answer_llm = answer_llm or get_llm()
+    refine_llm = refine_llm or get_llm()
 
     qa_workflow.add_node("qa_load_state", qa_load_state_node)
     qa_workflow.add_node("qa_filter", qa_filter_node)
@@ -358,6 +479,8 @@ def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None):
     qa_workflow.add_node("qa_modify_query", lambda state: qa_modify_query_node(state, rewrite_llm))
     qa_workflow.add_node("qa_retrieve_context", qa_retrieve_context_node)
     qa_workflow.add_node("qa_generate_answer", lambda state: qa_generate_answer_node(state, answer_llm))
+    qa_workflow.add_node("qa_check_refinement_needed", lambda state: qa_check_refinement_needed_node(state, rewrite_llm))
+    qa_workflow.add_node("qa_refine_report", lambda state: qa_refine_report_node(state, refine_llm))
 
     qa_workflow.add_edge(START, "qa_load_state")
     qa_workflow.add_edge("qa_load_state", "qa_filter")
@@ -372,13 +495,23 @@ def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None):
     qa_workflow.add_edge("qa_memory", "qa_modify_query")
     qa_workflow.add_edge("qa_modify_query", "qa_retrieve_context")
     qa_workflow.add_edge("qa_retrieve_context", "qa_generate_answer")
+    qa_workflow.add_edge("qa_generate_answer", "qa_check_refinement_needed")
+    qa_workflow.add_conditional_edges(
+        "qa_check_refinement_needed",
+        route_refinement,
+        {
+            "refine": "qa_refine_report",
+            "skip": END,
+        },
+    )
+    qa_workflow.add_edge("qa_refine_report", END)
     qa_workflow.add_edge("qa_invalid_response", END)
-    qa_workflow.add_edge("qa_generate_answer", END)
 
     return qa_workflow.compile()
 
 
 qa_app = build_qa_graph()
+
 
 
 def get_qa_graph_mermaid() -> str:
@@ -393,5 +526,9 @@ def get_qa_graph_mermaid() -> str:
             "    qa_memory --> qa_modify_query\n"
             "    qa_modify_query --> qa_retrieve_context\n"
             "    qa_retrieve_context --> qa_generate_answer\n"
-            "    qa_generate_answer --> END"
+            "    qa_generate_answer --> qa_check_refinement_needed\n"
+            "    qa_check_refinement_needed --> qa_refine_report\n"
+            "    qa_refine_report --> END\n"
+            "    qa_check_refinement_needed --> END"
         )
+
