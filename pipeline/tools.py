@@ -33,6 +33,16 @@ from scraper.web import (
 
 from core.database import SessionLocal
 from models.conversation import ChatSession
+from pydantic import BaseModel, Field
+
+class FeasibilityReportSchema(BaseModel):
+    chain_of_thought: list[str] = Field(default_factory=list, description="Step-by-step reasoning steps analyzing the startup idea feasibility")
+    idea_fit: str = Field(default="", description="Summary of how the idea fits the target market and customer needs")
+    competitors: str = Field(default="", description="Analysis of competitors, direct and indirect")
+    opportunity: str = Field(default="", description="Market opportunity and size/growth vectors")
+    score: str = Field(default="", description="A numerical feasibility score, e.g. 7.5/10, with brief rating rationale")
+    targeting: str = Field(default="", description="How to target the initial user base/customers")
+    next_step: str = Field(default="", description="Practical, immediate action steps for validation")
 
 logger = get_logger(__name__)
 WEB_RESEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=10)
@@ -374,6 +384,23 @@ def llm_agent_node(state: AgentState, llm) -> dict:
         ideal_customer=state['ideal_customer'],
         search_results=state['search_results']
     )
+
+    try:
+        if hasattr(llm, "with_structured_output"):
+            structured_llm = llm.with_structured_output(FeasibilityReportSchema)
+            response = structured_llm.invoke(prompt)
+            if isinstance(response, FeasibilityReportSchema):
+                logger.info("feasibility.analysis.structured_output_success")
+                return {"analysis": response.model_dump_json()}
+            elif isinstance(response, dict):
+                logger.info("feasibility.analysis.structured_output_dict_success")
+                return {"analysis": json.dumps(response, ensure_ascii=False)}
+    except Exception as exc:
+        logger.warning(
+            "feasibility.analysis.structured_output_failed error=%s. Falling back to raw text completion.",
+            exc,
+        )
+
     response = llm.invoke(prompt)
     raw_analysis = _extract_llm_content(response)
 

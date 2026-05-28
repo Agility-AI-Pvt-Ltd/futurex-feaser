@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from typing import List
 
@@ -48,11 +49,17 @@ def get_qdrant_client() -> QdrantClient:
     return get_local_qdrant_client(settings.lecture_qdrant_path)
 
 
+_verified_collections: set[str] = set()
+
+
 def ensure_collection(collection_name: str | None = None) -> None:
     if not settings.qdrant_enabled:
         return
 
     collection_name = collection_name or _default_collection_name()
+    if collection_name in _verified_collections:
+        return
+
     qdrant_client = get_qdrant_client()
     existing = [
         collection.name for collection in qdrant_client.get_collections().collections
@@ -66,6 +73,7 @@ def ensure_collection(collection_name: str | None = None) -> None:
                 on_disk=True,
             ),
         )
+        _verified_collections.add(collection_name)
         return
 
     collection_info = qdrant_client.get_collection(collection_name)
@@ -76,6 +84,7 @@ def ensure_collection(collection_name: str | None = None) -> None:
         current_size = getattr(default_vector, "size", None)
 
     if current_size == settings.LECTURE_VECTOR_SIZE:
+        _verified_collections.add(collection_name)
         return
 
     logger.warning(
@@ -93,6 +102,7 @@ def ensure_collection(collection_name: str | None = None) -> None:
             on_disk=True,
         ),
     )
+    _verified_collections.add(collection_name)
 
 
 def embed_text(text: str) -> List[float]:
@@ -100,13 +110,53 @@ def embed_text(text: str) -> List[float]:
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-    words = text.split()
+    # Split text into sentences using simple regex
+    sentences = re.split(r'(?<=[.!?])\s+', text)
     chunks: List[str] = []
-    step = chunk_size - overlap
-    for index in range(0, len(words), step):
-        chunk = " ".join(words[index : index + chunk_size])
-        if chunk:
-            chunks.append(chunk)
+    current_chunk_words: List[str] = []
+    current_word_count = 0
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        sentence_words = sentence.split()
+        sentence_word_count = len(sentence_words)
+
+        # If a single sentence is longer than chunk_size, split it by words as fallback
+        if sentence_word_count > chunk_size:
+            if current_chunk_words:
+                chunks.append(" ".join(current_chunk_words))
+                current_chunk_words = []
+                current_word_count = 0
+
+            for i in range(0, sentence_word_count, chunk_size - overlap):
+                chunk = " ".join(sentence_words[i : i + chunk_size])
+                if chunk:
+                    chunks.append(chunk)
+            continue
+
+        if current_word_count + sentence_word_count > chunk_size:
+            chunks.append(" ".join(current_chunk_words))
+
+            # Maintain overlapping words at sentence boundary
+            overlap_words: List[str] = []
+            overlap_count = 0
+            for word in reversed(current_chunk_words):
+                if overlap_count + 1 > overlap:
+                    break
+                overlap_words.insert(0, word)
+                overlap_count += 1
+
+            current_chunk_words = overlap_words + sentence_words
+            current_word_count = len(current_chunk_words)
+        else:
+            current_chunk_words.extend(sentence_words)
+            current_word_count += sentence_word_count
+
+    if current_chunk_words:
+        chunks.append(" ".join(current_chunk_words))
+
     return chunks
 
 
