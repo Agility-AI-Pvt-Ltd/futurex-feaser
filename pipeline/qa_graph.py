@@ -16,13 +16,12 @@ from typing import Any
 from langgraph.graph import StateGraph, START, END
 
 from core.config import settings
-from core.logging import get_logger, log_event
+from core.logging import get_logger
 from core.json_utils import parse_json_from_text
 from pipeline.state import AgentState
 from pipeline.prompts.qa import get_qa_prompt
 from pipeline.tools import FeasibilityReportSchema
 from pipeline.feasibility_parser import parse_feasibility_report
-from rag.retriever import conversation_chunk_count, retrieve_context
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
 
@@ -95,13 +94,13 @@ def qa_filter_node(state: AgentState) -> dict:
     question = (state.get("question") or "").strip()
     if _is_low_signal_qa_question(question):
         message = (
-            "Please ask a more specific follow-up question so I can run retrieval usefully. "
+            "Please ask a more specific follow-up question so I can answer from the idea-lab report. "
             "For example, ask about competitors, pricing, demand signals, or target users."
         )
         trace = _append_trace(
             state,
             "qa_filter",
-            "Blocked vague QA question before retrieval.",
+            "Blocked vague QA question before report-grounded answering.",
             {"question": question, "blocked": True},
         )
         return {
@@ -219,7 +218,7 @@ def qa_modify_query_node(state: AgentState, llm) -> dict:
     problem_solved = state.get("problem_solved", "")
 
     if not original_question:
-        trace = _append_trace(state, "qa_modify_query", "Skipped — question was empty.")
+        trace = _append_trace(state, "qa_modify_query", "Skipped - question was empty.")
         return {"qa_retrieval_query": "", "trace": trace}
 
     history = state.get("conversation_history", [])[-4:]
@@ -228,7 +227,7 @@ def qa_modify_query_node(state: AgentState, llm) -> dict:
     )
 
     rewrite_prompt = (
-        "You rewrite follow-up startup questions into standalone retrieval queries.\n"
+        "You rewrite follow-up startup questions into standalone report-grounded questions.\n"
         "Use startup context to disambiguate pronouns/short phrases.\n"
         "Do not invent facts. Keep it concise and explicit.\n"
         "Return ONLY the rewritten query text, no markdown.\n\n"
@@ -252,68 +251,30 @@ def qa_modify_query_node(state: AgentState, llm) -> dict:
     trace = _append_trace(
         state,
         "qa_modify_query",
-        "Rewrote user question into standalone retrieval query.",
+        "Rewrote user question into standalone report-grounded question.",
         {"original_question": original_question, "rewritten_query": rewritten},
     )
     return {"qa_retrieval_query": rewritten, "trace": trace}
 
 
-@ls_traceable(run_type="retriever", name="qa_retrieve_context_node", tags=["qa", "retrieval"])
-def qa_retrieve_context_node(state: AgentState) -> dict:
-    print("--- QA NODE: qa_retrieve_context_node ---")
+@ls_traceable(run_type="tool", name="qa_use_report_context_node", tags=["qa", "node"])
+def qa_use_report_context_node(state: AgentState) -> dict:
+    print("--- QA NODE: qa_use_report_context_node ---")
     question = state.get("question", "").strip()
     retrieval_query = state.get("qa_retrieval_query", "").strip() or question
-    conv_id = state.get("conversation_id", "")
-
-    print(f"  [QA] Original question: {question}")
-    print(f"  [QA] Retrieval query : {retrieval_query}")
-    print(f"  [QA] Searching Qdrant for conv_id: {conv_id}")
-
-    chunk_count = conversation_chunk_count(conv_id)
-    print(f"  [QA] Persisted chunk count for conv_id {conv_id}: {chunk_count}")
-
-    if chunk_count > 0:
-        context, chunks = retrieve_context(
-            conversation_id=conv_id,
-            query=retrieval_query,
-            top_k=settings.QA_TOP_K,
-        )
-    else:
-        context, chunks = "No relevant context found.", []
-        print("  [QA] No persisted chunks found for this conversation before retrieval.")
-
-    if not chunks:
-        fallback_context = (
-            f"[Persisted analysis]\n{state.get('analysis', '')}\n\n"
-            f"[Persisted web research]\n{state.get('search_results', '')}"
-        ).strip()
-        context = fallback_context or "No relevant context found."
-        print("  [QA] No vector chunks found, using persisted fallback context.")
-        log_event(
-            logger,
-            "qa_rag_fallback_used",
-            conversation_id=conv_id,
-            question=question,
-            retrieval_query=retrieval_query,
-            persisted_chunk_count=chunk_count,
-            fallback_has_analysis=bool(state.get("analysis")),
-            fallback_has_search_results=bool(state.get("search_results")),
-        )
+    context = (state.get("analysis") or "").strip() or "No idea-lab report found."
 
     trace = _append_trace(
         state,
-        "qa_retrieve_context",
-        "Retrieved RAG context for the user question.",
+        "qa_use_report_context",
+        "Loaded idea-lab report as QA context.",
         {
             "question": question,
             "retrieval_query": retrieval_query,
-            "persisted_chunk_count": chunk_count,
-            "requested_top_k": settings.QA_TOP_K,
-            "top_chunks": len(chunks),
-            "used_fallback": len(chunks) == 0,
+            "context_chars": len(context),
         },
     )
-    return {"rag_context": context, "top_chunks": chunks, "trace": trace}
+    return {"rag_context": context, "top_chunks": [], "trace": trace}
 
 
 @ls_traceable(run_type="tool", name="qa_generate_answer_node", tags=["qa", "node"])
@@ -322,7 +283,7 @@ def qa_generate_answer_node(state: AgentState, llm) -> dict:
 
     question   = state.get("question", "")
     idea       = state.get("idea", "your startup idea")
-    context    = state.get("rag_context", "No relevant context found.")
+    context    = state.get("rag_context") or state.get("analysis") or "No idea-lab report found."
     qa_history = state.get("qa_history", [])   # already windowed by qa_memory_node
     qa_summary = state.get("qa_summary", "")
 
@@ -421,9 +382,10 @@ def qa_refine_report_node(state: AgentState, llm) -> dict:
         "============================\n\n"
         "Instructions:\n"
         "1. Incorporate the new discussion points (corrections, choices, competitor details) into the appropriate section(s) of the feasibility report.\n"
-        "2. If the new information affects the feasibility score (e.g. risk reduced or target user clarified), adjust the \"score\" field accordingly (e.g. '7/10', '8/10').\n"
-        "3. Keep all other unchanged details in the report intact.\n"
-        "4. Your response must be in valid JSON conforming to the requested schema.\n"
+        "2. If the new information affects feasibility, adjust the \"score\" field accordingly (e.g. '75/100'). Keep only the numeric score in \"score\".\n"
+        "3. Put the score explanation in \"score_rationale\", never inside \"score\".\n"
+        "4. Keep all other unchanged details in the report intact.\n"
+        "5. Your response must be in valid JSON conforming to the requested schema.\n"
     )
 
     try:
@@ -470,17 +432,14 @@ def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None, refine
     memory_llm = memory_llm or get_llm(temperature=0.2)
     rewrite_llm = rewrite_llm or get_llm(temperature=0.2)
     answer_llm = answer_llm or get_llm()
-    refine_llm = refine_llm or get_llm()
 
     qa_workflow.add_node("qa_load_state", qa_load_state_node)
     qa_workflow.add_node("qa_filter", qa_filter_node)
     qa_workflow.add_node("qa_invalid_response", qa_invalid_response_node)
     qa_workflow.add_node("qa_memory", lambda state: qa_memory_node(state, memory_llm))
     qa_workflow.add_node("qa_modify_query", lambda state: qa_modify_query_node(state, rewrite_llm))
-    qa_workflow.add_node("qa_retrieve_context", qa_retrieve_context_node)
+    qa_workflow.add_node("qa_use_report_context", qa_use_report_context_node)
     qa_workflow.add_node("qa_generate_answer", lambda state: qa_generate_answer_node(state, answer_llm))
-    qa_workflow.add_node("qa_check_refinement_needed", lambda state: qa_check_refinement_needed_node(state, rewrite_llm))
-    qa_workflow.add_node("qa_refine_report", lambda state: qa_refine_report_node(state, refine_llm))
 
     qa_workflow.add_edge(START, "qa_load_state")
     qa_workflow.add_edge("qa_load_state", "qa_filter")
@@ -493,18 +452,9 @@ def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None, refine
         },
     )
     qa_workflow.add_edge("qa_memory", "qa_modify_query")
-    qa_workflow.add_edge("qa_modify_query", "qa_retrieve_context")
-    qa_workflow.add_edge("qa_retrieve_context", "qa_generate_answer")
-    qa_workflow.add_edge("qa_generate_answer", "qa_check_refinement_needed")
-    qa_workflow.add_conditional_edges(
-        "qa_check_refinement_needed",
-        route_refinement,
-        {
-            "refine": "qa_refine_report",
-            "skip": END,
-        },
-    )
-    qa_workflow.add_edge("qa_refine_report", END)
+    qa_workflow.add_edge("qa_modify_query", "qa_use_report_context")
+    qa_workflow.add_edge("qa_use_report_context", "qa_generate_answer")
+    qa_workflow.add_edge("qa_generate_answer", END)
     qa_workflow.add_edge("qa_invalid_response", END)
 
     return qa_workflow.compile()
@@ -522,13 +472,12 @@ def get_qa_graph_mermaid() -> str:
         return (
             "graph TD\n"
             "    START --> qa_load_state\n"
-            "    qa_load_state --> qa_memory\n"
+            "    qa_load_state --> qa_filter\n"
+            "    qa_filter -- qa_invalid_response --> qa_invalid_response\n"
+            "    qa_filter -- qa_memory --> qa_memory\n"
+            "    qa_invalid_response --> END\n"
             "    qa_memory --> qa_modify_query\n"
-            "    qa_modify_query --> qa_retrieve_context\n"
-            "    qa_retrieve_context --> qa_generate_answer\n"
-            "    qa_generate_answer --> qa_check_refinement_needed\n"
-            "    qa_check_refinement_needed --> qa_refine_report\n"
-            "    qa_refine_report --> END\n"
-            "    qa_check_refinement_needed --> END"
+            "    qa_modify_query --> qa_use_report_context\n"
+            "    qa_use_report_context --> qa_generate_answer\n"
+            "    qa_generate_answer --> END"
         )
-

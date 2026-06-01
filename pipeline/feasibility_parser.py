@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from core.json_utils import parse_json_from_text
@@ -12,6 +13,7 @@ FEASIBILITY_REPORT_KEYS = (
     "competitors",
     "opportunity",
     "score",
+    "score_rationale",
     "targeting",
     "next_step",
 )
@@ -35,14 +37,30 @@ def _normalize_text_field(value: Any) -> str:
     return str(value).strip()
 
 
+def _split_score_and_rationale(score: str, rationale: str) -> tuple[str, str]:
+    if rationale:
+        return score, rationale
+
+    match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?\s*/\s*[0-9]+(?:\.[0-9]+)?)(?:\.\s*)?(Rationale:\s*[\s\S]+)$", score, re.IGNORECASE)
+    if not match:
+        return score, rationale
+
+    return match.group(1).strip(), match.group(2).strip()
+
+
 def parse_feasibility_report(raw_text: str) -> dict[str, Any]:
     parsed = parse_json_from_text(raw_text, expected_type=dict)
+    score, score_rationale = _split_score_and_rationale(
+        _normalize_text_field(parsed.get("score")),
+        _normalize_text_field(parsed.get("score_rationale")),
+    )
     report = {
         "chain_of_thought": _normalize_chain_of_thought(parsed.get("chain_of_thought")),
         "idea_fit": _normalize_text_field(parsed.get("idea_fit")),
         "competitors": _normalize_text_field(parsed.get("competitors")),
         "opportunity": _normalize_text_field(parsed.get("opportunity")),
-        "score": _normalize_text_field(parsed.get("score")),
+        "score": score,
+        "score_rationale": score_rationale,
         "targeting": _normalize_text_field(parsed.get("targeting")),
         "next_step": _normalize_text_field(parsed.get("next_step")),
     }
@@ -57,13 +75,14 @@ def get_feasibility_report_repair_prompt(raw_text: str) -> str:
     return (
         "You are fixing malformed JSON from a startup feasibility analysis.\n"
         "Convert the content below into ONE strict valid JSON object.\n"
-        "Return ONLY JSON with EXACTLY these 7 keys:\n"
+        "Return ONLY JSON with EXACTLY these 8 keys:\n"
         '{\n'
         '  "chain_of_thought": ["..."],\n'
         '  "idea_fit": "",\n'
         '  "competitors": "",\n'
         '  "opportunity": "",\n'
         '  "score": "",\n'
+        '  "score_rationale": "",\n'
         '  "targeting": "",\n'
         '  "next_step": ""\n'
         '}\n'

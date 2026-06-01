@@ -7,7 +7,7 @@ def get_feasibility_prompt(idea: str, ideal_customer: str, search_results: str) 
         f"=== SCRAPED WEB DATA (General + Reddit) ===\n"
         f"{search_results}\n"
         f"==========================================\n\n"
-        "Provide the response as a single valid JSON object with EXACTLY these 7 keys:\n"
+        "Provide the response as a single valid JSON object with EXACTLY these 8 keys:\n"
         '{\n'
         '  "chain_of_thought": [\n'
         '    "Step 1: Extract explicitly stated facts from general web sources about the current market.",\n'
@@ -19,7 +19,8 @@ def get_feasibility_prompt(idea: str, ideal_customer: str, search_results: str) 
         '  "idea_fit": "Analyze how well this idea solves the target problem, referencing both market data and Reddit sentiment...",\n'
         '  "competitors": "List and analyze the specific competitors found in the web data...",\n'
         '  "opportunity": "Identify specific market gaps or opportunities mentioned in formal sources AND validated by Reddit community discussions...",\n'
-        '  "score": "Give a feasibility score out of 100 based on the full analysis (e.g. 75/100)...",\n'
+        '  "score": "Give ONLY the feasibility score out of 100, e.g. 75/100. Do not include rationale text here.",\n'
+        '  "score_rationale": "Briefly explain the main reasons behind the score in 2-4 sentences...",\n'
         '  "targeting": "Recommend exact customer segments to target based on the research and community insights...",\n'
         '  "next_step": "Provide actionable next steps to validate or build the product..."\n'
         '}\n\n'
@@ -27,4 +28,3 @@ def get_feasibility_prompt(idea: str, ideal_customer: str, search_results: str) 
         "Your entire analysis MUST be grounded in the provided web data. "
         "Where relevant, explicitly note whether a finding comes from formal market data or Reddit community discussions."
     )
-

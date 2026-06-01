@@ -45,6 +45,22 @@ class JsonUtilsTests(unittest.TestCase):
         self.assertEqual(report["chain_of_thought"], ["Step 1: Review market data"])
         self.assertEqual(normalized["targeting"], "SMB operators")
 
+    def test_feasibility_report_splits_score_rationale(self):
+        raw = json.dumps(
+            {
+                "score": "38/100. Rationale: Privacy risk and weak differentiation lower feasibility.",
+                "idea_fit": "Some demand exists.",
+            }
+        )
+
+        report = parse_feasibility_report(raw)
+
+        self.assertEqual(report["score"], "38/100")
+        self.assertEqual(
+            report["score_rationale"],
+            "Rationale: Privacy risk and weak differentiation lower feasibility.",
+        )
+
     def test_allowed_origins_csv_parsing(self):
         settings = Settings(
             ALLOWED_ORIGINS="http://localhost:3000, https://example.com",

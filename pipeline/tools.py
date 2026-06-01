@@ -40,7 +40,8 @@ class FeasibilityReportSchema(BaseModel):
     idea_fit: str = Field(default="", description="Summary of how the idea fits the target market and customer needs")
     competitors: str = Field(default="", description="Analysis of competitors, direct and indirect")
     opportunity: str = Field(default="", description="Market opportunity and size/growth vectors")
-    score: str = Field(default="", description="A numerical feasibility score, e.g. 7.5/10, with brief rating rationale")
+    score: str = Field(default="", description="Only the numerical feasibility score, e.g. 75/100")
+    score_rationale: str = Field(default="", description="Brief explanation of the main reasons behind the score")
     targeting: str = Field(default="", description="How to target the initial user base/customers")
     next_step: str = Field(default="", description="Practical, immediate action steps for validation")
 

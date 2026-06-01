@@ -58,6 +58,7 @@ from models import (
     AgentStateModel,
     ChatSession,
     FeasibilityReport,
+    IdeaVersion,
     LectureChatSession,
     LectureMessage,
     LectureTranscriptAsset,
@@ -65,6 +66,10 @@ from models import (
 )
 from pipeline.graph import app as langgraph_app
 from pipeline.feasibility_parser import parse_feasibility_report
+from pipeline.idea_refinement_graph import (
+    get_idea_refinement_graph_mermaid,
+    idea_refinement_app,
+)
 from pipeline.qa_graph import get_qa_graph_mermaid, qa_app as qa_langgraph_app
 from pipeline.tools import (
     generate_engagement_question_from_analysis,
@@ -110,6 +115,26 @@ class QaResponse(BaseModel):
     analysis: Optional[str] = None
 
 
+class IdeaRefinementInput(BaseModel):
+    conversation_id: str
+    refinement_text: str
+
+
+class IdeaRefinementResponse(BaseModel):
+    accepted: bool
+    conversation_id: str
+    version_number: Optional[int] = None
+    startup_idea: Optional[str] = None
+    problem_solved: Optional[str] = None
+    ideal_customer: Optional[str] = None
+    score_before: Optional[str] = None
+    score_after: Optional[str] = None
+    score_delta: Optional[int] = None
+    message: str
+    refinement_query: Optional[str] = None
+    trace: Optional[list[dict]] = None
+
+
 
 class EngagementReplyInput(BaseModel):
     conversation_id: str
@@ -147,6 +172,36 @@ def _trim_qa_history(history: list[dict]) -> list[dict]:
     if len(history) <= max_turns:
         return history
     return history[-max_turns:]
+
+
+def _score_from_report(analysis: str, report: FeasibilityReport | None = None) -> str:
+    if analysis:
+        try:
+            data = parse_feasibility_report(analysis)
+            score = data.get("score")
+            if score:
+                return str(score)
+        except ValueError:
+            pass
+    if report and report.score:
+        return str(report.score)
+    return ""
+
+
+def _idea_version_payload(version: IdeaVersion) -> dict[str, Any]:
+    return {
+        "version_number": version.version_number,
+        "startup_idea": version.startup_idea,
+        "problem_solved": version.problem_solved,
+        "ideal_customer": version.ideal_customer,
+        "refinement_text": version.refinement_text,
+        "refinement_query": version.refinement_query,
+        "score_before": version.report_score_before,
+        "score_after": version.score_after,
+        "score_delta": version.score_delta,
+        "rationale": version.rationale,
+        "created_at": str(version.created_at),
+    }
 
 
 def _commit_or_500(db: Session, action: str) -> None:
@@ -762,7 +817,6 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
             "qa_summary": qa_summary,
         }
 
-        original_analysis = state_model.analysis or ""
         result = await qa_langgraph_app.ainvoke(initial_state)
         answer = result.get("qa_answer") or "I couldn't generate an answer right now."
         chunks = result.get("top_chunks", [])
@@ -772,66 +826,148 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
         state_model.qa_history = new_full_history
         state_model.qa_summary = result.get("qa_summary", qa_summary)
 
-        # Check if the feasibility report got refined
-        new_analysis = result.get("analysis")
-        refined_analysis_returned = None
-        if new_analysis and new_analysis != original_analysis:
-            state_model.analysis = new_analysis
-            refined_analysis_returned = new_analysis
-            try:
-                data = parse_feasibility_report(new_analysis)
-                report = (
-                    db.query(FeasibilityReport)
-                    .filter(FeasibilityReport.conversation_id == conv_id)
-                    .first()
-                )
-                if not report:
-                    report = FeasibilityReport(conversation_id=conv_id)
-                    db.add(report)
-
-                report.chain_of_thought = data.get("chain_of_thought")
-                report.idea_fit = data.get("idea_fit")
-                report.competitors = data.get("competitors")
-                report.opportunity = data.get("opportunity")
-                report.score = data.get("score")
-                report.targeting = data.get("targeting")
-                report.next_step = data.get("next_step")
-                logging.info("[QA Refinement] Successfully refined feasibility report for conv=%s", conv_id)
-            except ValueError as exc:
-                logging.warning(
-                    "[QA Refinement] Refined LLM analysis output was not valid JSON for conversation %s: %s",
-                    conv_id,
-                    exc,
-                )
-
         db.commit()
 
-        # Cache invalidation
-        _inv_redis = get_redis()
-        if _inv_redis is not None and refined_analysis_returned:
-            try:
-                pattern = f"idealab:history:{first_session.authorId}:*"
-                keys = await _inv_redis.keys(pattern)
-                if keys:
-                    await _inv_redis.delete(*keys)
-            except Exception as exc:
-                logger.warning("Redis cache invalidation failed: %s", exc)
-
         logging.info(
-            "[QA Memory] conv=%s total_turns=%s summary_len=%s refined=%s",
+            "[QA Memory] conv=%s total_turns=%s summary_len=%s",
             conv_id,
             len(new_full_history),
             len(state_model.qa_summary or ""),
-            refined_analysis_returned is not None,
         )
     except Exception as exc:
         logging.error("Error during QA LLM call: %s", exc)
         answer = "I'm sorry, I encountered an error while trying to answer your question."
         chunks = []
         trace = [{"step": "qa_error", "message": str(exc)}]
-        refined_analysis_returned = None
 
-    return QaResponse(answer=answer, top_chunks=chunks, trace=trace, analysis=refined_analysis_returned)
+    return QaResponse(answer=answer, top_chunks=chunks, trace=trace, analysis=None)
+
+
+@ls_traceable(run_type="chain", name="idea_refinement_endpoint", tags=["api", "idea_refinement"])
+@router.post("/idea-refinement", response_model=IdeaRefinementResponse)
+async def idea_refinement_endpoint(
+    input_data: IdeaRefinementInput,
+    db: Session = Depends(get_db),
+):
+    conv_id = input_data.conversation_id
+    refinement_text = ensure_meaningful_text(input_data.refinement_text)
+
+    first_session = (
+        db.query(ChatSession)
+        .filter(ChatSession.conversation_id == conv_id)
+        .order_by(ChatSession.timestamp.asc())
+        .first()
+    )
+    if not first_session:
+        raise HTTPException(status_code=404, detail="Could not find chat history for this conversation.")
+
+    state_model = (
+        db.query(AgentStateModel)
+        .filter(AgentStateModel.conversation_id == conv_id)
+        .first()
+    )
+    if not state_model or not state_model.analysis:
+        raise HTTPException(status_code=404, detail="Could not find an idea-lab report for this conversation.")
+
+    latest_version = (
+        db.query(IdeaVersion)
+        .filter(IdeaVersion.conversation_id == conv_id)
+        .order_by(IdeaVersion.version_number.desc())
+        .first()
+    )
+
+    current_idea = latest_version.startup_idea if latest_version else (first_session.idea or "")
+    current_problem = latest_version.problem_solved if latest_version else (first_session.what_problem_it_solves or "")
+    current_customer = latest_version.ideal_customer if latest_version else (first_session.ideal_customer or "")
+    previous_version_number = latest_version.version_number if latest_version else 0
+    next_version_number = previous_version_number + 1
+
+    report = (
+        db.query(FeasibilityReport)
+        .filter(FeasibilityReport.conversation_id == conv_id)
+        .first()
+    )
+    score_before = _score_from_report(state_model.analysis or "", report)
+
+    initial_state = {
+        "idea": current_idea,
+        "user_name": first_session.user_name or "",
+        "ideal_customer": current_customer,
+        "problem_solved": current_problem,
+        "messages": [],
+        "search_results": state_model.search_results or "",
+        "analysis": state_model.analysis or "",
+        "is_new_chat": False,
+        "conversation_id": conv_id,
+        "conversation_history": [],
+        "optimized_query": state_model.optimized_query or "",
+        "optimized_queries": [],
+        "current_message": refinement_text,
+        "refinement_text": refinement_text,
+        "refinement_score_before": score_before,
+        "refinement_version": previous_version_number,
+        "trace": [],
+    }
+
+    try:
+        result = await idea_refinement_app.ainvoke(initial_state)
+    except Exception as exc:
+        logger.exception("Idea refinement graph failed")
+        raise HTTPException(status_code=500, detail="Idea refinement failed.") from exc
+
+    trace = result.get("trace", [])
+    if not result.get("is_valid_refinement", False):
+        return IdeaRefinementResponse(
+            accepted=False,
+            conversation_id=conv_id,
+            message=result.get("refinement_summary")
+            or result.get("validation_message")
+            or "Please provide a more concrete refinement.",
+            score_before=score_before,
+            trace=trace,
+        )
+
+    version = IdeaVersion(
+        conversation_id=conv_id,
+        version_number=next_version_number,
+        startup_idea=result.get("refined_idea") or current_idea,
+        problem_solved=result.get("refined_problem_solved") or current_problem,
+        ideal_customer=result.get("refined_ideal_customer") or current_customer,
+        refinement_text=refinement_text,
+        refinement_query=result.get("refinement_query") or refinement_text,
+        report_score_before=score_before,
+        score_after=result.get("refinement_score_after") or score_before,
+        score_delta=result.get("refinement_score_delta", 0),
+        rationale=result.get("refinement_summary") or "",
+    )
+    db.add(version)
+    _commit_or_500(db, "store idea refinement version")
+    db.refresh(version)
+
+    redis = get_redis()
+    if redis is not None:
+        try:
+            pattern = f"idealab:history:{first_session.authorId}:*"
+            keys = await redis.keys(pattern)
+            if keys:
+                await redis.delete(*keys)
+        except Exception as exc:
+            logger.warning("Redis cache invalidation failed: %s", exc)
+
+    return IdeaRefinementResponse(
+        accepted=True,
+        conversation_id=conv_id,
+        version_number=version.version_number,
+        startup_idea=version.startup_idea,
+        problem_solved=version.problem_solved,
+        ideal_customer=version.ideal_customer,
+        score_before=version.report_score_before,
+        score_after=version.score_after,
+        score_delta=version.score_delta,
+        message=version.rationale or "Created a new idea version.",
+        refinement_query=version.refinement_query,
+        trace=trace,
+    )
 
 
 @ls_traceable(run_type="chain", name="engagement_reply_endpoint", tags=["api", "engagement"])
@@ -1012,6 +1148,13 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
     if not state_model or not first_session:
         return {"error": "Conversation not found"}
 
+    idea_versions = (
+        db.query(IdeaVersion)
+        .filter(IdeaVersion.conversation_id == identifier)
+        .order_by(IdeaVersion.version_number.asc())
+        .all()
+    )
+
     return {
         "conversation_id": identifier,
         "idea": first_session.idea,
@@ -1025,6 +1168,8 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
             get_llm(temperature=0.4),
         ),
         "qa_history": state_model.qa_history or [],
+        "idea_versions": [_idea_version_payload(version) for version in idea_versions],
+        "latest_idea_version": _idea_version_payload(idea_versions[-1]) if idea_versions else None,
         "messages": [
             {
                 "human_message": session.human_message,
@@ -1231,4 +1376,12 @@ async def qa_graph_endpoint():
     return {
         "name": "qa_langgraph",
         "mermaid": get_qa_graph_mermaid(),
+    }
+
+
+@router.get("/idea-refinement/graph")
+async def idea_refinement_graph_endpoint():
+    return {
+        "name": "idea_refinement_langgraph",
+        "mermaid": get_idea_refinement_graph_mermaid(),
     }
