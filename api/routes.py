@@ -146,6 +146,11 @@ class EngagementReplyResponse(BaseModel):
     answer: str
 
 
+class ScoreResponse(BaseModel):
+    conversation_id: str
+    score: Optional[str] = None
+
+
 def _paginate_query(query, *, limit: int, offset: int):
     page_size = max(1, min(limit, settings.API_MAX_PAGE_SIZE))
     page_offset = max(0, offset)
@@ -841,6 +846,19 @@ async def qa_endpoint(input_data: QaInput, db: Session = Depends(get_db)):
         trace = [{"step": "qa_error", "message": str(exc)}]
 
     return QaResponse(answer=answer, top_chunks=chunks, trace=trace, analysis=None)
+
+
+@router.get("/score/{conversation_id}", response_model=ScoreResponse, tags=["Feasibility"])
+async def get_feasibility_score(conversation_id: str, db: Session = Depends(get_db)):
+    report = (
+        db.query(FeasibilityReport)
+        .filter(FeasibilityReport.conversation_id == conversation_id)
+        .first()
+    )
+    if not report:
+        raise HTTPException(status_code=404, detail="Could not find a feasibility report for this conversation.")
+
+    return ScoreResponse(conversation_id=conversation_id, score=report.score)
 
 
 @ls_traceable(run_type="chain", name="idea_refinement_endpoint", tags=["api", "idea_refinement"])

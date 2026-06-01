@@ -47,6 +47,7 @@ Both flows are securely isolated into separate PostgreSQL table namespaces, main
 ### Feasibility Endpoints
 - `POST /api/chat` (Feasibility payload)
 - `POST /api/qa` (Follow-up questions)
+- `GET /api/score/{conversation_id}` (Read the stored `feasibility_reports.score` value)
 - `GET /api/history?author_id=<authorId>` (List past startup analyses)
 - `GET /api/history/{conversation_id}` (Fetch specific analysis details)
 - `GET /api/qa/graph` (Returns Mermaid chart of the LangGraph QA architecture)
