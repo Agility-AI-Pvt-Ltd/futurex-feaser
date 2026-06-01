@@ -235,6 +235,7 @@ def run() -> None:
     reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes"}
 
     print(f"Binding FastAPI server on {host}:{port}")
+    
     uvicorn.run(
         "app:app",
         host=host,

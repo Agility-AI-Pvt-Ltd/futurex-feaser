@@ -9,11 +9,11 @@ def get_qa_prompt(
     qa_summary: Optional[str] = "",
 ) -> str:
     """
-    Generates the RAG Q&A prompt with sliding-window conversation memory.
+    Generates the report-grounded Q&A prompt with sliding-window conversation memory.
 
     Args:
         idea:        The startup idea name/concept.
-        context:     RAG-retrieved text chunks from Qdrant.
+        context:     The persisted idea-lab feasibility report.
         query:       The user's current question.
         qa_history:  List of recent {\"q\": ..., \"a\": ...} turns (last N, already windowed).
         qa_summary:  LLM-generated summary of older turns that fell outside the window.
@@ -42,14 +42,14 @@ def get_qa_prompt(
         f"You are an expert startup advisor assisting a user with their idea: '{idea}'.\n\n"
         f"They have already generated a feasibility report and are now having a follow-up Q&A session.\n\n"
         f"{memory_block}"
-        f"=== RETRIEVED CONTEXT FROM RESEARCH & REPORT ===\n"
+        f"=== IDEA-LAB FEASIBILITY REPORT ===\n"
         f"{context}\n"
-        f"=================================================\n\n"
+        f"===================================\n\n"
         f"User's Current Question: {query}\n\n"
         f"Instructions:\n"
         f"1. Use the conversation history above to understand context and avoid repeating yourself.\n"
-        f"2. Answer thoroughly based on the retrieved context and prior conversation.\n"
-        f"3. If the context does not cover the point, say so politely and offer reasoned general advice.\n"
+        f"2. Answer thoroughly based on the idea-lab report and prior conversation.\n"
+        f"3. If the report does not cover the point, say so politely and offer reasoned general advice.\n"
         f"4. Do not ignore the user's specific constraints or nuances.\n"
         f"5. Format the response clearly using markdown for readability."
     )

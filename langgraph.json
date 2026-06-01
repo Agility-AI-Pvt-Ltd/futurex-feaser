@@ -1,7 +1,9 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "pipeline": "./pipeline/graph.py:app"
+    "pipeline": "./pipeline/graph.py:app",
+    "qa_pipeline": "./pipeline/qa_graph.py:qa_app",
+    "idea_refinement_pipeline": "./pipeline/idea_refinement_graph.py:idea_refinement_app"
   },
   "env": ".env"
 }

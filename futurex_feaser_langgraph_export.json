@@ -1,0 +1,109 @@
+{
+  "project": "futurex-feaser",
+  "scope": "feaser_pipeline_only",
+  "excluded": ["lecturebot"],
+  "graphs": [
+    {
+      "name": "Main Analysis Graph",
+      "source": "pipeline/graph.py",
+      "compiled_app": "app",
+      "nodes": [
+        "load_context",
+        "idea_vagueness_filter",
+        "vague_idea_response",
+        "cross_question",
+        "modify_query",
+        "web_research",
+        "analyzer",
+        "engagement_question"
+      ],
+      "linear_edges": [
+        { "from": "START", "to": "load_context" },
+        { "from": "load_context", "to": "idea_vagueness_filter" },
+        { "from": "vague_idea_response", "to": "END" },
+        { "from": "cross_question", "to": "END" },
+        { "from": "modify_query", "to": "web_research" },
+        { "from": "web_research", "to": "analyzer" },
+        { "from": "analyzer", "to": "engagement_question" },
+        { "from": "engagement_question", "to": "END" }
+      ],
+      "conditional_edges": [
+        {
+          "from": "idea_vagueness_filter",
+          "router": "route_vagueness",
+          "conditions": [
+            { "condition": "vague", "to": "vague_idea_response" },
+            { "condition": "new", "to": "cross_question" },
+            { "condition": "follow", "to": "modify_query" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Q&A Graph",
+      "source": "pipeline/qa_graph.py",
+      "compiled_app": "qa_app",
+      "nodes": [
+        "qa_load_state",
+        "qa_filter",
+        "qa_invalid_response",
+        "qa_memory",
+        "qa_modify_query",
+        "qa_use_report_context",
+        "qa_generate_answer"
+      ],
+      "linear_edges": [
+        { "from": "START", "to": "qa_load_state" },
+        { "from": "qa_load_state", "to": "qa_filter" },
+        { "from": "qa_memory", "to": "qa_modify_query" },
+        { "from": "qa_modify_query", "to": "qa_use_report_context" },
+        { "from": "qa_use_report_context", "to": "qa_generate_answer" },
+        { "from": "qa_generate_answer", "to": "END" },
+        { "from": "qa_invalid_response", "to": "END" }
+      ],
+      "conditional_edges": [
+        {
+          "from": "qa_filter",
+          "router": "route_qa_filter",
+          "conditions": [
+            { "condition": "qa_invalid_response", "to": "qa_invalid_response" },
+            { "condition": "qa_memory", "to": "qa_memory" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Idea Refinement Graph",
+      "source": "pipeline/idea_refinement_graph.py",
+      "compiled_app": "idea_refinement_app",
+      "nodes": [
+        "idea_refinement_load_state",
+        "idea_refinement_filter",
+        "idea_refinement_invalid_response",
+        "idea_refinement_modify_query",
+        "idea_refinement_apply"
+      ],
+      "linear_edges": [
+        { "from": "START", "to": "idea_refinement_load_state" },
+        { "from": "idea_refinement_load_state", "to": "idea_refinement_filter" },
+        { "from": "idea_refinement_invalid_response", "to": "END" },
+        { "from": "idea_refinement_modify_query", "to": "idea_refinement_apply" },
+        { "from": "idea_refinement_apply", "to": "END" }
+      ],
+      "conditional_edges": [
+        {
+          "from": "idea_refinement_filter",
+          "router": "route_idea_refinement_filter",
+          "conditions": [
+            { "condition": "vague", "to": "idea_refinement_invalid_response" },
+            { "condition": "valid", "to": "idea_refinement_modify_query" }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+
+
+

@@ -39,3 +39,17 @@ class AgentState(TypedDict):
     qa_summary: NotRequired[str]          # LLM-compressed summary of older turns
     on_log: NotRequired[Any]              # Optional callback for real-time logging
     on_scrape_event: NotRequired[Any]     # Optional callback for structured URL scrape events
+    should_refine: NotRequired[bool]      # True if the report needs to be updated based on Q&A
+    refinement_reason: NotRequired[str]   # Explanation for why refinement was triggered/skipped
+    # ── Idea refinement flow fields (optional) ───────────────────────────────
+    refinement_text: NotRequired[str]
+    refinement_query: NotRequired[str]
+    is_valid_refinement: NotRequired[bool]
+    refined_idea: NotRequired[str]
+    refined_problem_solved: NotRequired[str]
+    refined_ideal_customer: NotRequired[str]
+    refinement_score_before: NotRequired[str]
+    refinement_score_after: NotRequired[str]
+    refinement_score_delta: NotRequired[int]
+    refinement_summary: NotRequired[str]
+    refinement_version: NotRequired[int]

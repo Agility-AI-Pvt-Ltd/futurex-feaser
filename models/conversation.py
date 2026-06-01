@@ -63,6 +63,34 @@ class FeasibilityReport(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
+class IdeaVersion(Base):
+    """
+    Versioned idea refinement state for a feasibility conversation.
+
+    Each accepted refinement creates a new immutable row with the improved
+    startup idea, problem solved, and ideal customer.
+    """
+    __tablename__ = "idea_versions"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "version_number", name="uq_idea_versions_conversation_version"),
+        Index("ix_idea_versions_conversation_created", "conversation_id", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(String, index=True, nullable=False)
+    version_number = Column(Integer, nullable=False)
+    startup_idea = Column(Text, nullable=False)
+    problem_solved = Column(Text, nullable=False)
+    ideal_customer = Column(Text, nullable=False)
+    refinement_text = Column(Text, nullable=False)
+    refinement_query = Column(Text, nullable=True)
+    report_score_before = Column(String, nullable=True)
+    score_after = Column(String, nullable=True)
+    score_delta = Column(Integer, nullable=True)
+    rationale = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+
 class AuthorDailyUsage(Base):
     """
     Tracks how many scrape-triggering requests an author has made on a given UTC day.

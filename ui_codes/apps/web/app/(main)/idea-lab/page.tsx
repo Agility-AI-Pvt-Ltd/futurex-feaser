@@ -1,6 +1,5 @@
 "use client";
 
-<<<<<<< HEAD
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuthStore } from "@/app/stores/authStore";
 import {
@@ -192,9 +191,6 @@ function MarkdownLikeText({
     </div>
   );
 }
-=======
-import { Lightbulb, Sparkles } from "lucide-react";
->>>>>>> 29a9781f514391037f7e29fa43b4ccf8a602ec18
 
 interface NodeStep {
   type: "node";
@@ -311,12 +307,15 @@ function ResearchTrailPanel({
   urlStatuses,
   countdown,
   activeNode,
+  logs = [],
 }: {
   steps: ReasoningStep[];
   urlStatuses: Record<string, "crawling" | "done" | "skipped">;
   countdown: number;
   activeNode: string;
+  logs?: string[];
 }) {
+  const [consoleOpen, setConsoleOpen] = useState(false);
   const nodeSteps = steps.filter((s): s is NodeStep => s.type === "node");
   const urlSteps = steps.filter((s): s is ScrapeUrlStep => s.type === "scrape_url");
   const lastNode = nodeSteps[nodeSteps.length - 1];
@@ -452,6 +451,40 @@ function ResearchTrailPanel({
         </p>
       )}
 
+      {/* Collapsible Console / Detailed Logs */}
+      {logs.length > 0 && (
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setConsoleOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-left transition hover:border-[#E1C068]/20 hover:bg-white/[0.05]"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                Detailed Research Logs
+              </p>
+              <p className="mt-1 text-[12px] text-white/62 truncate font-mono">
+                {logs[logs.length - 1]}
+              </p>
+            </div>
+            <ChevronDown
+              size={17}
+              className={`shrink-0 text-[#E1C068] transition-transform ${consoleOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          {consoleOpen && (
+            <div className="mt-3 rounded-2xl border border-white/5 bg-black/40 p-4 font-mono text-[11px] leading-5 text-emerald-400/90 max-h-[200px] overflow-y-auto pr-1 space-y-1 scrollbar-thin">
+              {logs.map((log, idx) => (
+                <div key={idx} className="whitespace-pre-wrap break-all border-b border-white/[0.02] pb-1 last:border-0 last:pb-0">
+                  <span className="text-white/30 mr-2">[{idx + 1}]</span>
+                  {log}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Progress bar */}
       <div className="mt-4 h-1 w-full overflow-hidden rounded-full bg-white/[0.06]">
         <div
@@ -466,7 +499,6 @@ function ResearchTrailPanel({
 }
 
 export default function IdeaLabPage() {
-<<<<<<< HEAD
   const user = useAuthStore((s) => s.user);
   const getToken = useAuthStore((s) => s.getToken);
 
@@ -503,6 +535,7 @@ export default function IdeaLabPage() {
   const [reasoningSteps, setReasoningSteps] = useState<ReasoningStep[]>([]);
   const [urlStatuses, setUrlStatuses] = useState<Record<string, "crawling" | "done" | "skipped">>({});
   const [activeNode, setActiveNode] = useState<string>("");
+  const [logs, setLogs] = useState<string[]>([]);
 
   const report = useMemo(() => parseReport(analysisRaw), [analysisRaw]);
   const hasFinalReport = Boolean(report);
@@ -616,6 +649,11 @@ export default function IdeaLabPage() {
   }, [submittingIdea, submittingClarification]);
 
   const applyResearchStreamEvent = useCallback((data: IdeaLabStreamEvent) => {
+    if (data.type === "log" && data.message) {
+      setLogs((prev) => [...prev, data.message as string]);
+      return;
+    }
+
     if (data.type === "node") {
       setActiveNode(data.node ?? "");
       setReasoningSteps((prev) => [
@@ -669,7 +707,7 @@ export default function IdeaLabPage() {
         });
       });
     }
-  }, []);
+  }, [setLogs]);
 
   async function handleIdeaSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -680,6 +718,7 @@ export default function IdeaLabPage() {
     setReasoningSteps([]);
     setUrlStatuses({});
     setActiveNode("");
+    setLogs([]);
     try {
       const res = await fetch("/api/idea-lab/chat/stream", {
         method: "POST",
@@ -755,6 +794,7 @@ export default function IdeaLabPage() {
     setReasoningSteps([]);
     setUrlStatuses({});
     setActiveNode("");
+    setLogs([]);
     try {
       const res = await fetch("/api/idea-lab/chat/stream", {
         method: "POST",
@@ -898,6 +938,7 @@ export default function IdeaLabPage() {
     setQaQuestion("");
     setError(null);
     setVagueMessage(null);
+    setLogs([]);
   }
 
   function collapseSidebarForWorkspace() {
@@ -1197,6 +1238,7 @@ export default function IdeaLabPage() {
                 urlStatuses={urlStatuses}
                 countdown={researchCountdown}
                 activeNode={activeNode}
+                logs={logs}
               />
             )}
 
@@ -1424,28 +1466,6 @@ function ReportSection({ title, body }: { title: string; body?: string }) {
         {title}
       </p>
       <MarkdownLikeText text={body} />
-=======
-  return (
-    <div className="flex min-h-[min(72vh,720px)] flex-col items-center justify-center px-4 py-12">
-      <div className="relative max-w-lg rounded-3xl border border-[#E1C068]/20 bg-[#171717] px-10 py-14 text-center shadow-[0_0_80px_-20px_rgba(225,192,104,0.35)]">
-        <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#E1C068]/14 text-[#E1C068]">
-          <Lightbulb size={28} aria-hidden />
-        </div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-[#E1C068]/70">
-          Idea Lab
-        </p>
-        <h1 className="mt-3 text-3xl font-black tracking-tight text-white">
-          Coming soon
-        </h1>
-        <p className="mt-4 text-[14px] leading-relaxed text-white/48">
-          We&apos;re polishing this workspace. You can continue from here later.
-        </p>
-        <div className="mt-8 inline-flex items-center gap-2 rounded-full border border-[#E1C068]/20 bg-[#E1C068]/8 px-4 py-2 text-[12px] font-medium text-[#E1C068]/90">
-          <Sparkles size={14} className="shrink-0" aria-hidden />
-          Stay tuned
-        </div>
-      </div>
->>>>>>> 29a9781f514391037f7e29fa43b4ccf8a602ec18
     </div>
   );
 }

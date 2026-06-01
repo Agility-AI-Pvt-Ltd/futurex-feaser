@@ -11,16 +11,20 @@ Memory:
 """
 
 from datetime import datetime, timezone
+import json
 from typing import Any
 from langgraph.graph import StateGraph, START, END
 
 from core.config import settings
-from core.logging import get_logger, log_event
+from core.logging import get_logger
+from core.json_utils import parse_json_from_text
 from pipeline.state import AgentState
 from pipeline.prompts.qa import get_qa_prompt
-from rag.retriever import conversation_chunk_count, retrieve_context
+from pipeline.tools import FeasibilityReportSchema
+from pipeline.feasibility_parser import parse_feasibility_report
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
+
 
 
 # ── Memory constants ───────────────────────────────────────────────────────────
@@ -90,13 +94,13 @@ def qa_filter_node(state: AgentState) -> dict:
     question = (state.get("question") or "").strip()
     if _is_low_signal_qa_question(question):
         message = (
-            "Please ask a more specific follow-up question so I can run retrieval usefully. "
+            "Please ask a more specific follow-up question so I can answer from the idea-lab report. "
             "For example, ask about competitors, pricing, demand signals, or target users."
         )
         trace = _append_trace(
             state,
             "qa_filter",
-            "Blocked vague QA question before retrieval.",
+            "Blocked vague QA question before report-grounded answering.",
             {"question": question, "blocked": True},
         )
         return {
@@ -214,7 +218,7 @@ def qa_modify_query_node(state: AgentState, llm) -> dict:
     problem_solved = state.get("problem_solved", "")
 
     if not original_question:
-        trace = _append_trace(state, "qa_modify_query", "Skipped — question was empty.")
+        trace = _append_trace(state, "qa_modify_query", "Skipped - question was empty.")
         return {"qa_retrieval_query": "", "trace": trace}
 
     history = state.get("conversation_history", [])[-4:]
@@ -223,7 +227,7 @@ def qa_modify_query_node(state: AgentState, llm) -> dict:
     )
 
     rewrite_prompt = (
-        "You rewrite follow-up startup questions into standalone retrieval queries.\n"
+        "You rewrite follow-up startup questions into standalone report-grounded questions.\n"
         "Use startup context to disambiguate pronouns/short phrases.\n"
         "Do not invent facts. Keep it concise and explicit.\n"
         "Return ONLY the rewritten query text, no markdown.\n\n"
@@ -247,68 +251,30 @@ def qa_modify_query_node(state: AgentState, llm) -> dict:
     trace = _append_trace(
         state,
         "qa_modify_query",
-        "Rewrote user question into standalone retrieval query.",
+        "Rewrote user question into standalone report-grounded question.",
         {"original_question": original_question, "rewritten_query": rewritten},
     )
     return {"qa_retrieval_query": rewritten, "trace": trace}
 
 
-@ls_traceable(run_type="retriever", name="qa_retrieve_context_node", tags=["qa", "retrieval"])
-def qa_retrieve_context_node(state: AgentState) -> dict:
-    print("--- QA NODE: qa_retrieve_context_node ---")
+@ls_traceable(run_type="tool", name="qa_use_report_context_node", tags=["qa", "node"])
+def qa_use_report_context_node(state: AgentState) -> dict:
+    print("--- QA NODE: qa_use_report_context_node ---")
     question = state.get("question", "").strip()
     retrieval_query = state.get("qa_retrieval_query", "").strip() or question
-    conv_id = state.get("conversation_id", "")
-
-    print(f"  [QA] Original question: {question}")
-    print(f"  [QA] Retrieval query : {retrieval_query}")
-    print(f"  [QA] Searching Qdrant for conv_id: {conv_id}")
-
-    chunk_count = conversation_chunk_count(conv_id)
-    print(f"  [QA] Persisted chunk count for conv_id {conv_id}: {chunk_count}")
-
-    if chunk_count > 0:
-        context, chunks = retrieve_context(
-            conversation_id=conv_id,
-            query=retrieval_query,
-            top_k=settings.QA_TOP_K,
-        )
-    else:
-        context, chunks = "No relevant context found.", []
-        print("  [QA] No persisted chunks found for this conversation before retrieval.")
-
-    if not chunks:
-        fallback_context = (
-            f"[Persisted analysis]\n{state.get('analysis', '')}\n\n"
-            f"[Persisted web research]\n{state.get('search_results', '')}"
-        ).strip()
-        context = fallback_context or "No relevant context found."
-        print("  [QA] No vector chunks found, using persisted fallback context.")
-        log_event(
-            logger,
-            "qa_rag_fallback_used",
-            conversation_id=conv_id,
-            question=question,
-            retrieval_query=retrieval_query,
-            persisted_chunk_count=chunk_count,
-            fallback_has_analysis=bool(state.get("analysis")),
-            fallback_has_search_results=bool(state.get("search_results")),
-        )
+    context = (state.get("analysis") or "").strip() or "No idea-lab report found."
 
     trace = _append_trace(
         state,
-        "qa_retrieve_context",
-        "Retrieved RAG context for the user question.",
+        "qa_use_report_context",
+        "Loaded idea-lab report as QA context.",
         {
             "question": question,
             "retrieval_query": retrieval_query,
-            "persisted_chunk_count": chunk_count,
-            "requested_top_k": settings.QA_TOP_K,
-            "top_chunks": len(chunks),
-            "used_fallback": len(chunks) == 0,
+            "context_chars": len(context),
         },
     )
-    return {"rag_context": context, "top_chunks": chunks, "trace": trace}
+    return {"rag_context": context, "top_chunks": [], "trace": trace}
 
 
 @ls_traceable(run_type="tool", name="qa_generate_answer_node", tags=["qa", "node"])
@@ -317,7 +283,7 @@ def qa_generate_answer_node(state: AgentState, llm) -> dict:
 
     question   = state.get("question", "")
     idea       = state.get("idea", "your startup idea")
-    context    = state.get("rag_context", "No relevant context found.")
+    context    = state.get("rag_context") or state.get("analysis") or "No idea-lab report found."
     qa_history = state.get("qa_history", [])   # already windowed by qa_memory_node
     qa_summary = state.get("qa_summary", "")
 
@@ -343,8 +309,124 @@ def qa_generate_answer_node(state: AgentState, llm) -> dict:
     return {"qa_answer": _extract_llm_content(response), "trace": trace}
 
 
+def qa_check_refinement_needed_node(state: AgentState, llm) -> dict:
+    """
+    Lightweight LLM gate to check if the latest user question + assistant answer contains
+    new insights or pivot decisions that warrant updating the feasibility report.
+    """
+    print("--- QA NODE: qa_check_refinement_needed_node ---")
+    question = state.get("question", "").strip()
+    answer = state.get("qa_answer", "").strip()
+    analysis = state.get("analysis", "").strip()
+
+    if not analysis or not question or not answer:
+        return {"should_refine": False, "refinement_reason": "Missing inputs."}
+
+    prompt = (
+        "You are an AI startup analyst evaluating if a conversation turn changes a startup's feasibility analysis.\n"
+        "Analyze the following conversation turn between a founder and a startup advisor:\n\n"
+        f"Founder: {question}\n"
+        f"Advisor: {answer}\n\n"
+        "Original Feasibility Report summary keys/data:\n"
+        f"{analysis[:1500]}\n\n"
+        "Task:\n"
+        "Determine if the founder provided new concrete facts, target audience shifts, strategic pivots, "
+        "competitor observations, or decisions that modify the core assumptions, next steps, or the feasibility score of the original report.\n"
+        "If the user is just asking generic questions, saying thank you, or no new concrete data is added, output False.\n"
+        "Return a JSON object with two fields:\n"
+        "1. \"should_refine\": boolean (true or false)\n"
+        "2. \"reason\": string (brief explanation of why)\n\n"
+        "JSON Response:"
+    )
+
+    try:
+        response = llm.invoke(prompt)
+        content = _extract_llm_content(response)
+        parsed = parse_json_from_text(content, expected_type=dict)
+        should_refine = bool(parsed.get("should_refine", False))
+        reason = str(parsed.get("reason", "No reason provided."))
+        print(f"  [Refinement Gate] should_refine: {should_refine}. Reason: {reason}")
+    except Exception as e:
+        logger.warning("qa_check_refinement_needed failed: %s", e)
+        should_refine = False
+        reason = f"Error in gate: {e}"
+
+    trace = _append_trace(
+        state,
+        "qa_check_refinement_needed",
+        f"Evaluated refinement gate. decision={should_refine}",
+        {"should_refine": should_refine, "reason": reason},
+    )
+    return {"should_refine": should_refine, "refinement_reason": reason, "trace": trace}
+
+
+def qa_refine_report_node(state: AgentState, llm) -> dict:
+    """
+    Regenerates the feasibility report incorporating the new Q&A discussion insights.
+    """
+    print("--- QA NODE: qa_refine_report_node ---")
+    question = state.get("question", "")
+    answer = state.get("qa_answer", "")
+    original_analysis = state.get("analysis", "")
+    idea = state.get("idea", "the startup idea")
+
+    prompt = (
+        "You are an elite startup analysis agent. Refine the existing feasibility report of the startup idea based on the new Q&A turn.\n\n"
+        f"Startup Idea: {idea}\n\n"
+        f"=== ORIGINAL FEASIBILITY REPORT ===\n"
+        f"{original_analysis}\n"
+        "====================================\n\n"
+        f"=== NEW DISCUSSION TURN ===\n"
+        f"Founder: {question}\n"
+        f"Advisor: {answer}\n"
+        "============================\n\n"
+        "Instructions:\n"
+        "1. Incorporate the new discussion points (corrections, choices, competitor details) into the appropriate section(s) of the feasibility report.\n"
+        "2. If the new information affects feasibility, adjust the \"score\" field accordingly (e.g. '75/100'). Keep only the numeric score in \"score\".\n"
+        "3. Put the score explanation in \"score_rationale\", never inside \"score\".\n"
+        "4. Keep all other unchanged details in the report intact.\n"
+        "5. Your response must be in valid JSON conforming to the requested schema.\n"
+    )
+
+    try:
+        if hasattr(llm, "with_structured_output"):
+            structured_llm = llm.with_structured_output(FeasibilityReportSchema)
+            response = structured_llm.invoke(prompt)
+            if isinstance(response, FeasibilityReportSchema):
+                refined = response.model_dump_json()
+                logger.info("qa_refine_report.structured_output_success")
+                trace = _append_trace(state, "qa_refine_report", "Successfully refined report structure.", {"refined": True})
+                return {"analysis": refined, "trace": trace}
+            elif isinstance(response, dict):
+                refined = json.dumps(response, ensure_ascii=False)
+                logger.info("qa_refine_report.structured_output_dict_success")
+                trace = _append_trace(state, "qa_refine_report", "Successfully refined report (dict).", {"refined": True})
+                return {"analysis": refined, "trace": trace}
+    except Exception as exc:
+        logger.warning("qa_refine_report structured output failed: %s. Falling back to text.", exc)
+
+    try:
+        response = llm.invoke(prompt)
+        content = _extract_llm_content(response)
+        refined = json.dumps(parse_feasibility_report(content), ensure_ascii=False)
+        trace = _append_trace(state, "qa_refine_report", "Refined report using fallback text generation.", {"refined": True, "fallback": True})
+        return {"analysis": refined, "trace": trace}
+    except Exception as exc:
+        logger.error("qa_refine_report fallback failed: %s", exc)
+        trace = _append_trace(state, "qa_refine_report", f"Failed to refine report: {exc}", {"refined": False, "error": str(exc)})
+        return {"trace": trace}
+
+
+def route_refinement(state: AgentState) -> str:
+    if state.get("should_refine", False):
+        print("--- QA ROUTER: Routing to qa_refine_report ---")
+        return "refine"
+    print("--- QA ROUTER: Routing to END ---")
+    return "skip"
+
+
 # ── Graph wiring ───────────────────────────────────────────────────────────────
-def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None):
+def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None, refine_llm=None):
     qa_workflow = StateGraph(AgentState)
 
     memory_llm = memory_llm or get_llm(temperature=0.2)
@@ -356,7 +438,7 @@ def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None):
     qa_workflow.add_node("qa_invalid_response", qa_invalid_response_node)
     qa_workflow.add_node("qa_memory", lambda state: qa_memory_node(state, memory_llm))
     qa_workflow.add_node("qa_modify_query", lambda state: qa_modify_query_node(state, rewrite_llm))
-    qa_workflow.add_node("qa_retrieve_context", qa_retrieve_context_node)
+    qa_workflow.add_node("qa_use_report_context", qa_use_report_context_node)
     qa_workflow.add_node("qa_generate_answer", lambda state: qa_generate_answer_node(state, answer_llm))
 
     qa_workflow.add_edge(START, "qa_load_state")
@@ -370,15 +452,16 @@ def build_qa_graph(*, memory_llm=None, rewrite_llm=None, answer_llm=None):
         },
     )
     qa_workflow.add_edge("qa_memory", "qa_modify_query")
-    qa_workflow.add_edge("qa_modify_query", "qa_retrieve_context")
-    qa_workflow.add_edge("qa_retrieve_context", "qa_generate_answer")
-    qa_workflow.add_edge("qa_invalid_response", END)
+    qa_workflow.add_edge("qa_modify_query", "qa_use_report_context")
+    qa_workflow.add_edge("qa_use_report_context", "qa_generate_answer")
     qa_workflow.add_edge("qa_generate_answer", END)
+    qa_workflow.add_edge("qa_invalid_response", END)
 
     return qa_workflow.compile()
 
 
 qa_app = build_qa_graph()
+
 
 
 def get_qa_graph_mermaid() -> str:
@@ -389,9 +472,12 @@ def get_qa_graph_mermaid() -> str:
         return (
             "graph TD\n"
             "    START --> qa_load_state\n"
-            "    qa_load_state --> qa_memory\n"
+            "    qa_load_state --> qa_filter\n"
+            "    qa_filter -- qa_invalid_response --> qa_invalid_response\n"
+            "    qa_filter -- qa_memory --> qa_memory\n"
+            "    qa_invalid_response --> END\n"
             "    qa_memory --> qa_modify_query\n"
-            "    qa_modify_query --> qa_retrieve_context\n"
-            "    qa_retrieve_context --> qa_generate_answer\n"
+            "    qa_modify_query --> qa_use_report_context\n"
+            "    qa_use_report_context --> qa_generate_answer\n"
             "    qa_generate_answer --> END"
         )
