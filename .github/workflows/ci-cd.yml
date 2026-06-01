@@ -75,10 +75,13 @@ jobs:
             git fetch origin
             git reset --hard origin/main
 
-            if [ ! -f "$ENV_FILE" ]; then
-              echo "Missing env file: $ENV_FILE"
+            if [ -z "${{ secrets.ENV_FILE }}" ]; then
+              echo "Missing ENV_FILE secret."
               exit 1
             fi
+
+            printf '%s' "${{ secrets.ENV_FILE }}" > "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
 
             # Build and run with Docker Compose
             docker compose up -d --build --remove-orphans
