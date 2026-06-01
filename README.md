@@ -275,6 +275,7 @@ A GitHub Actions workflow (`.github/workflows/ci-cd.yml`) handles deployments:
 - Builds the Docker image.
 - Runs a smoke-test container on port `7860`.
 - Deploys directly to EC2 on `push` to the `main` branch.
+- Writes the deployment `.env` from the `ENV_FILE` GitHub secret before `docker compose up`.
 
 ---
 
