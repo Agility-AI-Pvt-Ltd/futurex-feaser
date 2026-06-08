@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 logger = logging.getLogger(__name__)
 
-from api.dependencies import enforce_api_rate_limit, get_db
+from api.dependencies import enforce_api_rate_limit, get_db, require_internal_service_auth
 from api.input_validation import ensure_meaningful_text
 from core.database import settings, SessionLocal
 from core.llm_factory import get_llm
@@ -1403,3 +1403,130 @@ async def idea_refinement_graph_endpoint():
         "name": "idea_refinement_langgraph",
         "mermaid": get_idea_refinement_graph_mermaid(),
     }
+
+
+# ── Internal service endpoint: list feasibility reports ──────────────────────
+
+def _report_record_to_api(
+    report: FeasibilityReport,
+    cs: ChatSession | None,
+    iv: IdeaVersion | None,
+) -> dict:
+    """Serialize a FeasibilityReport row into the canonical API shape used by project_review."""
+    import datetime as _dt
+    title = (iv.startup_idea if iv else None) or (cs.idea if cs else None) or report.idea_fit or "Untitled idea"
+    created_at = report.created_at
+    created_iso = created_at.isoformat() if isinstance(created_at, _dt.datetime) else str(created_at) if created_at else None
+    return {
+        "id": str(report.id),
+        "conversationId": report.conversation_id,
+        "idea": title,
+        "score": report.score,
+        "status": "COMPLETE",
+        "updatedAt": created_iso,
+        "createdAt": created_iso,
+        "ownerName": cs.user_name if cs else None,
+        "authorId": cs.authorId if cs else None,
+        # Full structured fields (bonus, not in the minimal _report_to_api shape)
+        "ideaFit": report.idea_fit,
+        "competitors": report.competitors,
+        "opportunity": report.opportunity,
+        "targeting": report.targeting,
+        "nextStep": report.next_step,
+    }
+
+
+@router.get(
+    "/reports",
+    tags=["Reports"],
+    summary="List feasibility reports (internal service endpoint)",
+    dependencies=[Depends(require_internal_service_auth)],
+)
+async def list_reports(
+    author_id: Optional[str] = None,
+    include_all: bool = False,
+    limit: int = 25,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Return feasibility reports in the shape expected by project_review.
+
+    - **author_id**: when provided, *myReports* contains only that author's reports.
+    - **include_all**: when True, *allReports* contains every report regardless of author.
+    - **limit**: max rows per list (1–100, default 25).
+
+    Response schema::
+
+        {
+          "myReports":  [ { id, conversationId, idea, score, status, ... } ],
+          "allReports": [ ... ]
+        }
+    """
+    limit = max(1, min(limit, 100))
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _fetch_reports(filter_author: Optional[str]) -> list[dict]:
+        """
+        Join feasibility_reports → latest chat_session → latest idea_version
+        (mirrors the SQL in project_review/database/reports.py).
+        """
+        # Subquery: latest chat_session id per conversation
+        from sqlalchemy import func as _func
+        latest_cs_sub = (
+            db.query(
+                ChatSession.conversation_id,
+                _func.max(ChatSession.id).label("max_cs_id"),
+            )
+            .group_by(ChatSession.conversation_id)
+            .subquery()
+        )
+        # Subquery: latest idea_version per conversation
+        latest_iv_sub = (
+            db.query(
+                IdeaVersion.conversation_id,
+                _func.max(IdeaVersion.version_number).label("max_ver"),
+            )
+            .group_by(IdeaVersion.conversation_id)
+            .subquery()
+        )
+
+        query = (
+            db.query(FeasibilityReport, ChatSession, IdeaVersion)
+            .outerjoin(
+                latest_cs_sub,
+                FeasibilityReport.conversation_id == latest_cs_sub.c.conversation_id,
+            )
+            .outerjoin(
+                ChatSession,
+                ChatSession.id == latest_cs_sub.c.max_cs_id,
+            )
+            .outerjoin(
+                latest_iv_sub,
+                FeasibilityReport.conversation_id == latest_iv_sub.c.conversation_id,
+            )
+            .outerjoin(
+                IdeaVersion,
+                (IdeaVersion.conversation_id == latest_iv_sub.c.conversation_id)
+                & (IdeaVersion.version_number == latest_iv_sub.c.max_ver),
+            )
+        )
+
+        if filter_author:
+            query = query.filter(ChatSession.authorId == filter_author)
+
+        rows = (
+            query.order_by(FeasibilityReport.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [_report_record_to_api(fr, cs, iv) for fr, cs, iv in rows]
+
+    # ── build response ───────────────────────────────────────────────────────
+    my_reports: list[dict] = _fetch_reports(author_id) if author_id else []
+    if include_all or not author_id:
+        all_reports: list[dict] = _fetch_reports(None)
+    else:
+        all_reports = my_reports
+
+    return {"myReports": my_reports, "allReports": all_reports}
+

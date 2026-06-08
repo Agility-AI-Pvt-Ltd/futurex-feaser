@@ -92,6 +92,68 @@ class IdeaRefinementGraphTests(unittest.TestCase):
         self.assertEqual(apply_result["refined_idea"], "AI study planner with adaptive reminders")
         self.assertEqual(apply_result["refinement_score_delta"], 5)
         self.assertEqual(apply_result["refinement_score_after"], "75/100")
+        self.assertIn("already present", apply_llm.prompts[0])
+        self.assertIn("score_delta to 0", apply_llm.prompts[0])
+
+    def test_apply_clamps_score_delta_to_remaining_room_under_100(self):
+        apply_llm = FakeLLM(
+            [
+                '{"startup_idea":"AI study planner with reminders",'
+                '"problem_solved":"helps students recover missed study sessions",'
+                '"ideal_customer":"college students preparing for exams",'
+                '"score_delta":10,'
+                '"score_after":"108/100",'
+                '"rationale":"Useful improvement."}'
+            ]
+        )
+
+        result = idea_refinement_apply_node(
+            {
+                "idea": "AI study planner",
+                "problem_solved": "helps students plan exam revision",
+                "ideal_customer": "college students",
+                "analysis": '{"competitors":"Competitors have reminders."}',
+                "refinement_query": "Add reminders",
+                "refinement_text": "Add reminders.",
+                "refinement_score_before": "98/100",
+                "refinement_version": 1,
+                "trace": [],
+            },
+            apply_llm,
+        )
+
+        self.assertEqual(result["refinement_score_delta"], 2)
+        self.assertEqual(result["refinement_score_after"], "100/100")
+
+    def test_apply_keeps_score_at_100_when_already_maxed(self):
+        apply_llm = FakeLLM(
+            [
+                '{"startup_idea":"AI study planner",'
+                '"problem_solved":"helps students plan exam revision",'
+                '"ideal_customer":"college students",'
+                '"score_delta":5,'
+                '"score_after":"105/100",'
+                '"rationale":"Repeated feature."}'
+            ]
+        )
+
+        result = idea_refinement_apply_node(
+            {
+                "idea": "AI study planner",
+                "problem_solved": "helps students plan exam revision",
+                "ideal_customer": "college students",
+                "analysis": '{"next_step":"Add reminders."}',
+                "refinement_query": "Add reminders",
+                "refinement_text": "Add reminders.",
+                "refinement_score_before": "100/100",
+                "refinement_version": 1,
+                "trace": [],
+            },
+            apply_llm,
+        )
+
+        self.assertEqual(result["refinement_score_delta"], 0)
+        self.assertEqual(result["refinement_score_after"], "100/100")
 
 
 if __name__ == "__main__":

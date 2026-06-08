@@ -61,6 +61,18 @@ def _parse_score(score: str) -> int | None:
     return max(0, min(100, int(match.group(1))))
 
 
+def _bounded_score_delta(raw_delta: Any, score_number: int | None) -> int:
+    try:
+        score_delta = int(raw_delta)
+    except Exception:
+        score_delta = 0
+
+    score_delta = max(0, min(10, score_delta))
+    if score_number is None:
+        return score_delta
+    return min(score_delta, max(0, 100 - score_number))
+
+
 def idea_refinement_load_state_node(state: AgentState) -> dict:
     print("--- IDEA REFINEMENT NODE: load_state ---")
     trace = _append_trace(
@@ -198,15 +210,21 @@ def idea_refinement_apply_node(state: AgentState, llm) -> dict:
     score_number = _parse_score(score_before)
     score_instruction = (
         f"The current report score is {score_before}. "
-        "If the founder adds features that competitors already use successfully, or features "
-        "that directly address competitor gaps, unserved needs, weak targeting, or next steps "
-        "named in the report, increase the score by 1 to 10 points. If the refinement is useful "
-        "but weakly tied to the report, increase by 0 to 3 points. Never exceed 100/100."
+        "Only increase the score when the founder adds a genuinely new, specific improvement "
+        "that is not already present in the current startup idea, problem solved, ideal customer, "
+        "or idea-lab report. If the refinement repeats something already implemented, already "
+        "recommended, or already captured in the current version, set score_delta to 0. If the "
+        "founder adds features that competitors already use successfully, or features that "
+        "directly address competitor gaps, unserved needs, weak targeting, or next steps named "
+        "in the report, increase the score by 1 to 10 points. If the refinement is useful but "
+        "weakly tied to the report, increase by 0 to 3 points. Score movement must be either "
+        "+N or 0, must never be negative, and score_after must never exceed 100/100."
     )
     if score_number is None:
         score_instruction = (
-            "The current report score is unavailable. Estimate a small delta from 0 to 10, "
-            "but leave score_after as an empty string."
+            "The current report score is unavailable. Estimate a small delta from 0 to 10 only "
+            "for genuinely new improvements. If the refinement is already present or repeated, "
+            "set score_delta to 0. Leave score_after as an empty string."
         )
 
     prompt = (
@@ -216,6 +234,11 @@ def idea_refinement_apply_node(state: AgentState, llm) -> dict:
         "startup_idea, problem_solved, ideal_customer.\n\n"
         "Scoring rule:\n"
         f"{score_instruction}\n\n"
+        "Duplicate guardrail:\n"
+        "- Compare the standalone refinement query against the current version and critic context.\n"
+        "- If the same feature, customer, positioning, or strategy already exists, do not reward it again.\n"
+        "- In that case keep the fields stable where appropriate, set score_delta to 0, and explain that the "
+        "refinement was already covered.\n\n"
         f"=== CURRENT VERSION NUMBER ===\n{state.get('refinement_version', 0)}\n\n"
         f"=== CURRENT STARTUP IDEA ===\n{state.get('idea', '')}\n\n"
         f"=== CURRENT PROBLEM SOLVED ===\n{state.get('problem_solved', '')}\n\n"
@@ -246,15 +269,10 @@ def idea_refinement_apply_node(state: AgentState, llm) -> dict:
             "rationale": f"Could not apply refinement automatically: {exc}",
         }
 
-    score_delta = parsed.get("score_delta", 0)
-    try:
-        score_delta = int(score_delta)
-    except Exception:
-        score_delta = 0
-    score_delta = max(0, min(10, score_delta))
+    score_delta = _bounded_score_delta(parsed.get("score_delta", 0), score_number)
 
     if score_number is not None:
-        score_after = f"{min(100, score_number + score_delta)}/100"
+        score_after = f"{score_number + score_delta}/100"
     else:
         score_after = str(parsed.get("score_after") or "")
 
