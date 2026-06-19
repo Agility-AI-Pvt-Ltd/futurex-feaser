@@ -2,6 +2,7 @@ import json
 import logging
 import sys
 import time
+from threading import Timer
 from typing import Any
 
 from sqlalchemy import event
@@ -13,9 +14,23 @@ try:
     from axiom_py.logging import AxiomHandler
 
     class SafeAxiomHandler(AxiomHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.timer.daemon = True
+
         def emit(self, record):
             try:
-                super().emit(record)
+                self.buffer.append(record.__dict__)
+                if (
+                    len(self.buffer) >= 1000
+                    or time.monotonic() - self.last_flush > self.interval
+                ):
+                    self.flush()
+
+                self.timer.cancel()
+                self.timer = Timer(self.interval, self.flush)
+                self.timer.daemon = True
+                self.timer.start()
             except Exception as exc:
                 print(f"Axiom emit failed: {exc}", file=sys.stderr)
         
@@ -52,6 +67,7 @@ def configure_logging() -> logging.Logger:
 
     if (
         HAS_AXIOM
+        and settings.AXIOM_ENABLED
         and settings.AXIOM_TOKEN
         and settings.AXIOM_DATASET
         and not _AXIOM_HANDLER_ATTACHED
