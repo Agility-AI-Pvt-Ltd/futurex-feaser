@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     INTERNAL_AUTH_REQUIRED_SERVICE: Optional[str] = Field(default="main-backend")
 
     # ── Axiom Logging ────────────────────────────────────────────────────────
+    AXIOM_ENABLED: bool = Field(default=False)
     AXIOM_TOKEN: str = Field(default="")
     AXIOM_DATASET: str = Field(default="")
     LANGSMITH_TRACING: bool = Field(default=False)

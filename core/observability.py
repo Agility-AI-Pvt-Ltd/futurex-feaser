@@ -48,7 +48,6 @@ def ls_traceable(*, run_type: str = "chain", name: str | None = None, tags: list
             run_type=run_type,
             name=name,
             project_name=settings.LANGSMITH_PROJECT,
-            client=get_langsmith_client(),
             enabled=langsmith_enabled(),
             tags=tags,
         )(func)
@@ -62,7 +61,6 @@ def ls_tracing_context(*, metadata: dict[str, Any] | None = None, tags: list[str
 
     return tracing_context(
         project_name=settings.LANGSMITH_PROJECT,
-        client=get_langsmith_client(),
         enabled=langsmith_enabled(),
         metadata=metadata,
         tags=tags,
