@@ -7,7 +7,9 @@ sdk: docker
 pinned: false
 ---
 
-this is for re deploying
+when you change .env on AWS than use
+docker compose up -d --force-recreate futurex
+so non on cachces wipes out
 
 # Futurex Feaser
 
