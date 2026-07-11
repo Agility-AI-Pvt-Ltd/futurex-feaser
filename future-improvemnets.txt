@@ -1,0 +1,14 @@
+What I would change
+
+Keep Qdrant in Docker, but:
+
+Mount persistent storage (EBS-backed).
+Take backups.
+Make the app connect via container name:
+QdrantClient(host="qdrant", port=6333)
+
+instead of localhost when using Docker Compose.
+
+When you need multiple app replicas later, either:
+Keep one dedicated Qdrant server and point all apps to it, or
+Move to a managed vector DB / Qdrant cluster
