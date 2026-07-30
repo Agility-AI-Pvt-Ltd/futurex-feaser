@@ -288,8 +288,32 @@ Production deploys install `/usr/local/bin/futurex-docker-safe-cleanup` as a roo
 A GitHub Actions workflow (`.github/workflows/ci-cd.yml`) handles deployments:
 - Builds the Docker image.
 - Runs a smoke-test container on port `7860`.
-- Deploys directly to EC2 on `push` to the `main` branch.
-- Writes the deployment `.env` from the `ENV_FILE` GitHub secret before `docker compose up`.
+- Pushes the image to Amazon ECR on `push` to the `main` branch.
+- Tags each image with both the commit SHA and `latest`.
+- Optionally starts an EC2 Auto Scaling Group instance refresh after pushing.
+
+Required GitHub Actions secrets:
+
+```text
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+POSTGRES_URL
+OPENAI_API_KEY
+```
+
+Optional GitHub Actions repository variable:
+
+```text
+APP_ASG_NAME=futurex-app-asg
+```
+
+If `APP_ASG_NAME` is not set, the workflow still pushes the image to ECR but skips the Auto Scaling Group refresh.
+
+The app Launch Template should pull:
+
+```text
+429965675866.dkr.ecr.ap-south-1.amazonaws.com/futurex-app:latest
+```
 
 ---
 
