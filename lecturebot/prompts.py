@@ -134,6 +134,7 @@ def get_question_analysis_messages(
         "answer_mode": "rag | whole_transcript_summary",
         "confidence": "low | medium | high",
         "reason": "short explanation",
+        "normalized_question": "spell-corrected, lightly rephrased latest user message preserving intent",
         "resolved_question": "self-contained rewritten user intent for retrieval and answering",
         "history_context_used": "short summary of the relevant earlier turn, or 'none'",
     }
@@ -142,6 +143,7 @@ def get_question_analysis_messages(
             content=(
                 "Analyze whether the user's latest message depends on earlier conversation. "
                 "Reason silently and return only valid JSON. "
+                "First correct spelling and lightly rephrase the latest message while preserving the user's intent. "
                 "If the user is continuing or clarifying, rewrite it into a self-contained question. "
                 "Prioritize the user's latest message over older history when deciding answer_mode. "
                 "Only choose whole_transcript_summary if the latest user message itself clearly asks for "

@@ -38,12 +38,28 @@ def get_redis():
         return None
     if _redis_client is None:
         url = settings.REDIS_URL or "redis://localhost:6379"
+        max_connections = max(1, settings.REDIS_MAX_CONNECTIONS)
+        pool_timeout = max(0.1, settings.REDIS_POOL_TIMEOUT_SECONDS)
+        socket_connect_timeout = max(0.1, settings.REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS)
+        socket_timeout = max(0.1, settings.REDIS_SOCKET_TIMEOUT_SECONDS)
+        health_check_interval = max(0, settings.REDIS_HEALTH_CHECK_INTERVAL_SECONDS)
         logger.info(
-            "redis.client_configured url=%s required=%s",
+            "redis.client_configured url=%s required=%s max_connections=%s pool_timeout=%s",
             _redact_redis_url(url),
             settings.REDIS_REQUIRED,
+            max_connections,
+            pool_timeout,
         )
-        _redis_client = aioredis.from_url(url, decode_responses=True)
+        pool = aioredis.BlockingConnectionPool.from_url(
+            url,
+            decode_responses=True,
+            max_connections=max_connections,
+            timeout=pool_timeout,
+            socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_timeout,
+            health_check_interval=health_check_interval,
+        )
+        _redis_client = aioredis.Redis(connection_pool=pool)
     return _redis_client
 
 
