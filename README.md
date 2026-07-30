@@ -116,20 +116,21 @@ NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
 FASTEMBED_CACHE_DIR=/data/cache/fastembed
 FASTEMBED_FALLBACK_CACHE_DIR=fastembed_cache
 RAG_LOG_CHUNK_CHARS=400
-QDRANT_COLLECTION_NAME=transcripts
-# Use `remote` for a self-hosted/local Qdrant server reachable by URL.
-# Use `local` only for embedded on-disk Qdrant inside the app process.
+# Production app instances should use the internal Qdrant NLB URL.
 QDRANT_BACKEND=remote
-QDRANT_URL=http://127.0.0.1:6333
+QDRANT_URL=http://futurex-qdrant-nlb-cbe793c9289264f0.elb.ap-south-1.amazonaws.com:6333
 QDRANT_API_KEY=
 QDRANT_CLOUD_URL=
 QDRANT_CLOUD_API_KEY=
+
+# Local embedded-Qdrant settings. Ignored when QDRANT_BACKEND=remote.
 QDRANT_PATH=/data/qdrant
 QDRANT_FALLBACK_PATH=qdrant_data
 
 # Lecture Settings
 LECTURE_TRANSCRIPT_STORAGE_PATH=transcripts_data
 LECTURE_QDRANT_COLLECTION_NAME=lecture_transcripts
+# Local embedded lecture-Qdrant setting. Ignored when QDRANT_BACKEND=remote.
 LECTURE_QDRANT_PATH=/data/qdrant
 LECTURE_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 LECTURE_VECTOR_SIZE=384
@@ -150,6 +151,8 @@ AXIOM_DATASET=...
 ## Qdrant Vector Storage
 
 New Qdrant collections are created with `on_disk=True` in their `VectorParams`. This stores the raw vector data on disk instead of keeping all vectors resident in RAM. The HNSW graph index remains memory-resident, so RAM usage scales mostly with the index graph rather than the full vector matrix.
+
+When `QDRANT_BACKEND=remote`, the app connects only to `QDRANT_URL` or `QDRANT_CLOUD_URL`. `QDRANT_PATH`, `QDRANT_FALLBACK_PATH`, and `LECTURE_QDRANT_PATH` are used only for embedded/local Qdrant mode.
 
 Example estimate for 100k vectors with 384 dimensions:
 
