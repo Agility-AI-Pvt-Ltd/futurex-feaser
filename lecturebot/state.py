@@ -12,6 +12,7 @@ class ChatPipelineState(TypedDict):
     answer_mode: NotRequired[str]
     relation_confidence: NotRequired[str]
     relation_reason: NotRequired[str]
+    normalized_question: NotRequired[str]
     resolved_question: NotRequired[str]
     history_context_used: NotRequired[str]
     transcript_id: NotRequired[int]

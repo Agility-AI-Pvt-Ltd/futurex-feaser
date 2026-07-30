@@ -77,6 +77,15 @@ def _build_retrieval_query(state: ChatPipelineState) -> str:
     return state.get("resolved_question", state["question"]).strip()
 
 
+def _summary_intent_texts(state: ChatPipelineState, analysis: dict | None = None) -> tuple[str, ...]:
+    analysis = analysis or {}
+    return (
+        state.get("question", ""),
+        analysis.get("normalized_question", "") or state.get("normalized_question", ""),
+        analysis.get("resolved_question", "") or state.get("resolved_question", ""),
+    )
+
+
 def _looks_like_whole_transcript_summary_request(*texts: str) -> bool:
     combined = " ".join(text for text in texts if text).strip().lower()
     if not combined:
@@ -130,6 +139,7 @@ def _fallback_question_analysis(state: ChatPipelineState) -> dict:
         ),
         "relation_confidence": "low",
         "relation_reason": "fallback heuristic",
+        "normalized_question": question,
         "resolved_question": question,
         "history_context_used": history_context_used,
     }
@@ -174,6 +184,7 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
             "answer_mode": parsed.get("answer_mode", RAG_ANSWER_MODE),
             "relation_confidence": parsed.get("confidence", "medium"),
             "relation_reason": parsed.get("reason", ""),
+            "normalized_question": parsed.get("normalized_question", state["question"]),
             "resolved_question": parsed.get("resolved_question", state["question"]),
             "history_context_used": parsed.get("history_context_used", "none"),
         }
@@ -182,7 +193,7 @@ def analyze_question_node(state: ChatPipelineState) -> dict:
         result = _fallback_question_analysis(state)
     if result.get("answer_mode") not in {RAG_ANSWER_MODE, WHOLE_TRANSCRIPT_SUMMARY_MODE}:
         result["answer_mode"] = RAG_ANSWER_MODE
-    if _looks_like_whole_transcript_summary_request(state["question"]):
+    if _looks_like_whole_transcript_summary_request(*_summary_intent_texts(state, result)):
         result["answer_mode"] = WHOLE_TRANSCRIPT_SUMMARY_MODE
     return result
 

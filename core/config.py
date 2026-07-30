@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     REDIS_ENABLED: bool = Field(default=False)
     REDIS_URL: str = Field(default="redis://localhost:6379")
     REDIS_REQUIRED: bool = Field(default=False)
+    REDIS_MAX_CONNECTIONS: int = Field(default=20)
+    REDIS_POOL_TIMEOUT_SECONDS: float = Field(default=5.0)
+    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float = Field(default=3.0)
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = Field(default=3.0)
+    REDIS_HEALTH_CHECK_INTERVAL_SECONDS: int = Field(default=30)
 
     # ── Google Search ──────────────────────────────────────────────────────────
     GOOGLE_API_KEY: str = Field(default="")

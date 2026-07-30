@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200" role="img" aria-labelledby="title desc">
+  <title id="title">AI Lecture Bot High Level Architecture</title>
+  <desc id="desc">High level system architecture for the ClassCatchup AI Lecture Bot in the Futurex Feaser project.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f6f1e8"/>
+      <stop offset="45%" stop-color="#eef6f3"/>
+      <stop offset="100%" stop-color="#e8eef7"/>
+    </linearGradient>
+    <linearGradient id="header" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0f513f"/>
+      <stop offset="55%" stop-color="#124c73"/>
+      <stop offset="100%" stop-color="#5f4b32"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#1a2e35" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M 1 1 L 12 7 L 1 13 z" fill="#244850"/>
+    </marker>
+    <marker id="arrow-teal" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M 1 1 L 12 7 L 1 13 z" fill="#0d7464"/>
+    </marker>
+    <marker id="arrow-gold" markerWidth="14" markerHeight="14" refX="11" refY="7" orient="auto" markerUnits="strokeWidth">
+      <path d="M 1 1 L 12 7 L 1 13 z" fill="#8c6418"/>
+    </marker>
+    <style>
+      .title { font: 800 46px "Aptos Display", "Avenir Next", Arial, sans-serif; fill: #ffffff; letter-spacing: 0; }
+      .subtitle { font: 500 20px "Aptos", "Avenir Next", Arial, sans-serif; fill: rgba(255,255,255,0.86); letter-spacing: 0; }
+      .label { font: 800 23px "Aptos", "Avenir Next", Arial, sans-serif; fill: #12343b; letter-spacing: 0; }
+      .small { font: 500 18px "Aptos", "Avenir Next", Arial, sans-serif; fill: #35565d; letter-spacing: 0; }
+      .tiny { font: 600 15px "Aptos", "Avenir Next", Arial, sans-serif; fill: #496970; letter-spacing: 0; }
+      .pill { font: 800 15px "Aptos", "Avenir Next", Arial, sans-serif; fill: #ffffff; letter-spacing: 0.3px; }
+      .note { font: 650 17px "Aptos", "Avenir Next", Arial, sans-serif; fill: #5d4a22; letter-spacing: 0; }
+      .box { fill: #ffffff; stroke: #bfd3d1; stroke-width: 2; rx: 18; filter: url(#shadow); }
+      .soft { fill: #f9fcfb; stroke: #d8e7e4; stroke-width: 2; rx: 14; }
+      .store { fill: #fffaf0; stroke: #e2c878; stroke-width: 2; rx: 18; filter: url(#shadow); }
+      .ai { fill: #f1f7ff; stroke: #9ab9d2; stroke-width: 2; rx: 18; filter: url(#shadow); }
+      .obs { fill: #f7f2ea; stroke: #cdb889; stroke-width: 2; rx: 18; filter: url(#shadow); }
+      .line { fill: none; stroke: #244850; stroke-width: 4; marker-end: url(#arrow); }
+      .line-thin { fill: none; stroke: #47666c; stroke-width: 3; marker-end: url(#arrow); }
+      .line-teal { fill: none; stroke: #0d7464; stroke-width: 4; marker-end: url(#arrow-teal); }
+      .line-gold { fill: none; stroke: #8c6418; stroke-width: 4; marker-end: url(#arrow-gold); }
+      .dash { fill: none; stroke: #8c6418; stroke-width: 3.2; stroke-dasharray: 10 9; marker-end: url(#arrow-gold); }
+      .cluster-title { font: 800 19px "Aptos", "Avenir Next", Arial, sans-serif; fill: #0f513f; letter-spacing: 1px; }
+      .cluster { fill: rgba(255,255,255,0.44); stroke: rgba(42,84,91,0.22); stroke-width: 2; rx: 24; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1200" fill="url(#bg)"/>
+  <path d="M0 156 C250 96 430 190 660 136 C930 72 1092 132 1314 96 C1537 61 1667 89 1800 44 L1800 0 L0 0 Z" fill="#ffffff" opacity="0.42"/>
+  <rect x="76" y="54" width="1648" height="122" rx="28" fill="url(#header)" filter="url(#shadow)"/>
+  <text x="116" y="105" class="title">AI Lecture Bot: High Level Architecture</text>
+  <text x="118" y="143" class="subtitle">ClassCatchup flow: transcript ingestion, grounded RAG chat, summaries, memory, and persistence</text>
+
+  <rect x="76" y="216" width="305" height="770" class="cluster"/>
+  <text x="105" y="252" class="cluster-title">CLIENT + EDGE API</text>
+  <rect x="106" y="282" width="245" height="142" class="box"/>
+  <text x="132" y="322" class="label">Student / Admin</text>
+  <text x="132" y="358" class="small">ClassCatchup chat UI</text>
+  <text x="132" y="386" class="small">Lecturebot admin upload</text>
+  <text x="132" y="414" class="tiny">Next.js pages</text>
+
+  <rect x="106" y="474" width="245" height="186" class="box"/>
+  <text x="132" y="514" class="label">Next.js API Routes</text>
+  <text x="132" y="550" class="small">/classcatchup/upload</text>
+  <text x="132" y="578" class="small">/classcatchup/chat</text>
+  <text x="132" y="606" class="small">/sessions, /transcripts</text>
+  <text x="132" y="636" class="tiny">auth + internal JWT</text>
+
+  <rect x="106" y="710" width="245" height="132" class="store"/>
+  <text x="132" y="750" class="label">Redis Cache</text>
+  <text x="132" y="786" class="small">session lists</text>
+  <text x="132" y="814" class="small">messages + transcripts</text>
+
+  <rect x="455" y="216" width="910" height="770" class="cluster"/>
+  <text x="486" y="252" class="cluster-title">FASTAPI BACKEND (/api)</text>
+  <rect x="490" y="282" width="315" height="154" class="box"/>
+  <text x="520" y="322" class="label">API Router</text>
+  <text x="520" y="358" class="small">rate limit dependency</text>
+  <text x="520" y="386" class="small">payload dispatch</text>
+  <text x="520" y="414" class="tiny">lecture chat vs feasibility flow</text>
+
+  <rect x="490" y="502" width="315" height="242" class="box"/>
+  <text x="520" y="542" class="label">Transcript Ingestion</text>
+  <text x="520" y="580" class="small">accept .txt / .vtt upload</text>
+  <text x="520" y="608" class="small">convert VTT + clean text</text>
+  <text x="520" y="636" class="small">create asset + metadata rows</text>
+  <text x="520" y="664" class="small">chunk transcript</text>
+  <text x="520" y="692" class="small">FastEmbed vectors</text>
+  <text x="520" y="722" class="tiny">BAAI/bge-small-en-v1.5, 384 dims</text>
+
+  <rect x="490" y="804" width="315" height="124" class="box"/>
+  <text x="520" y="844" class="label">Transcript Lifecycle</text>
+  <text x="520" y="880" class="small">metadata PATCH</text>
+  <text x="520" y="908" class="small">reprocess via shadow collection</text>
+
+  <rect x="890" y="282" width="405" height="646" class="ai"/>
+  <text x="924" y="322" class="label">Lecture LangGraph</text>
+  <rect x="924" y="356" width="335" height="58" class="soft"/>
+  <text x="948" y="393" class="small">1. Analyze question + history</text>
+  <rect x="924" y="442" width="335" height="58" class="soft"/>
+  <text x="948" y="479" class="small">2A. Whole transcript summary</text>
+  <rect x="924" y="528" width="335" height="58" class="soft"/>
+  <text x="948" y="565" class="small">2B. Retrieve top-k chunks</text>
+  <rect x="924" y="614" width="335" height="58" class="soft"/>
+  <text x="948" y="651" class="small">3. Relevance gate</text>
+  <rect x="924" y="700" width="335" height="58" class="soft"/>
+  <text x="948" y="737" class="small">4. Grounded answer / refusal</text>
+  <rect x="924" y="786" width="335" height="58" class="soft"/>
+  <text x="948" y="823" class="small">5. Summarize memory</text>
+  <text x="924" y="886" class="tiny">Compiled in lecturebot/graph.py</text>
+
+  <rect x="1420" y="216" width="304" height="770" class="cluster"/>
+  <text x="1450" y="252" class="cluster-title">DATA + SERVICES</text>
+  <rect x="1450" y="282" width="244" height="142" class="store"/>
+  <text x="1478" y="322" class="label">PostgreSQL</text>
+  <text x="1478" y="358" class="small">sessions + messages</text>
+  <text x="1478" y="386" class="small">assets + metadata</text>
+  <text x="1478" y="414" class="tiny">summary cache + memory</text>
+
+  <rect x="1450" y="474" width="244" height="142" class="store"/>
+  <text x="1478" y="514" class="label">Qdrant</text>
+  <text x="1478" y="550" class="small">lecture_transcripts</text>
+  <text x="1478" y="578" class="small">vector search</text>
+  <text x="1478" y="606" class="tiny">local or remote backend</text>
+
+  <rect x="1450" y="666" width="244" height="118" class="ai"/>
+  <text x="1478" y="706" class="label">OpenAI LLM</text>
+  <text x="1478" y="742" class="small">question analysis</text>
+  <text x="1478" y="770" class="small">answer + summaries</text>
+
+  <rect x="1450" y="834" width="244" height="116" class="obs"/>
+  <text x="1478" y="874" class="label">Observability</text>
+  <text x="1478" y="910" class="small">HTTP logs</text>
+  <text x="1478" y="938" class="small">LangSmith / Axiom</text>
+
+  <rect x="490" y="1016" width="365" height="92" class="store"/>
+  <text x="520" y="1056" class="label">Transcript Text Storage</text>
+  <text x="520" y="1092" class="small">DB-backed text plus object_path metadata</text>
+
+  <rect x="935" y="1016" width="360" height="92" class="store"/>
+  <text x="965" y="1056" class="label">Qdrant Backup Sidecar</text>
+  <text x="965" y="1092" class="small">Docker snapshot to GCS when configured</text>
+
+  <path class="line" d="M351 353 C405 353 427 353 490 353"/>
+  <text x="386" y="336" class="tiny">requests</text>
+  <path class="line" d="M351 566 C404 566 430 474 490 374"/>
+  <text x="374" y="526" class="tiny">proxy + JWT</text>
+  <path class="line-teal" d="M647 436 L647 502"/>
+  <text x="666" y="474" class="tiny">upload</text>
+  <path class="line-teal" d="M805 624 C838 624 856 624 890 624"/>
+  <text x="819" y="604" class="tiny">clean chunks</text>
+  <path class="line" d="M805 354 C838 354 856 354 890 354"/>
+  <text x="824" y="337" class="tiny">chat invoke</text>
+
+  <path class="line-gold" d="M805 582 C1030 515 1250 392 1450 356"/>
+  <text x="1122" y="454" class="tiny">asset rows + transcript text</text>
+  <path class="line-gold" d="M805 690 C1030 674 1246 564 1450 548"/>
+  <text x="1112" y="628" class="tiny">vectors + payload</text>
+  <path class="line-gold" d="M805 866 C1036 845 1248 834 1450 384"/>
+  <text x="1040" y="834" class="tiny">metadata updates</text>
+  <path class="dash" d="M805 908 C1040 960 1230 656 1450 558"/>
+  <text x="1032" y="940" class="tiny">reindex shadow collection</text>
+
+  <path class="line-thin" d="M1295 388 C1350 376 1380 366 1450 356"/>
+  <text x="1322" y="342" class="tiny">load history</text>
+  <path class="line-thin" d="M1295 558 C1356 550 1384 546 1450 544"/>
+  <text x="1326" y="534" class="tiny">semantic search</text>
+  <path class="line-thin" d="M1295 728 C1358 724 1382 724 1450 724"/>
+  <text x="1320" y="708" class="tiny">LLM calls</text>
+  <path class="line-thin" d="M1295 822 C1356 788 1390 448 1450 404"/>
+  <text x="1310" y="800" class="tiny">save memory</text>
+  <path class="line-thin" d="M1295 892 C1358 896 1384 896 1450 896"/>
+
+  <path class="line-thin" d="M351 768 C418 768 421 1044 490 1062"/>
+  <text x="366" y="815" class="tiny">cached UI reads</text>
+  <path class="line-gold" d="M1160 1016 C1240 965 1338 734 1450 576"/>
+  <text x="1194" y="998" class="tiny">snapshots</text>
+
+  <rect x="110" y="1010" width="240" height="98" rx="16" fill="#fffdf7" stroke="#d4c6a4" stroke-width="2"/>
+  <rect x="132" y="1032" width="72" height="28" rx="14" fill="#0d7464"/>
+  <text x="148" y="1052" class="pill">MAIN</text>
+  <text x="220" y="1052" class="note">green arrows = ingestion</text>
+  <rect x="132" y="1072" width="72" height="28" rx="14" fill="#244850"/>
+  <text x="148" y="1092" class="pill">CHAT</text>
+  <text x="220" y="1092" class="note">blue arrows = question flow</text>
+</svg>

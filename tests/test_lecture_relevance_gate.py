@@ -2,9 +2,11 @@ import unittest
 
 from lecturebot.graph import route_after_question_analysis, route_relevance
 from lecturebot.tools import (
+    RAG_ANSWER_MODE,
     _fallback_relevance_check,
     _fallback_question_analysis,
     _looks_like_whole_transcript_summary_request,
+    _summary_intent_texts,
     irrelevant_question_node,
 )
 
@@ -64,6 +66,26 @@ class LectureRelevanceGateTests(unittest.TestCase):
             "summary",
         )
         self.assertEqual(route_after_question_analysis({"answer_mode": "rag"}), "rag")
+
+    def test_summary_intent_uses_llm_normalized_question_text(self):
+        state = {"question": "plz give summry of the sesion"}
+        analysis = {
+            "answer_mode": RAG_ANSWER_MODE,
+            "normalized_question": "Please give a summary of the session",
+            "resolved_question": "Please summarize the whole lecture session",
+        }
+
+        self.assertTrue(
+            _looks_like_whole_transcript_summary_request(
+                *_summary_intent_texts(state, analysis)
+            )
+        )
+
+    def test_fallback_includes_normalized_question(self):
+        result = _fallback_question_analysis({"question": "What is gradient descent?"})
+
+        self.assertEqual(result["normalized_question"], "What is gradient descent?")
+        self.assertEqual(result["answer_mode"], RAG_ANSWER_MODE)
 
     def test_irrelevant_question_node_returns_refusal_answer(self):
         result = irrelevant_question_node(

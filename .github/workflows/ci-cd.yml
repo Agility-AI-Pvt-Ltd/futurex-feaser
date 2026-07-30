@@ -86,6 +86,13 @@ jobs:
             # Build and run with Docker Compose
             docker compose up -d --build --remove-orphans
 
+            # Keep Docker cache/log growth under control on the small EC2 root volume.
+            sudo install -m 0755 scripts/docker_safe_cleanup.sh /usr/local/bin/futurex-docker-safe-cleanup
+            (
+              sudo crontab -l 2>/dev/null | grep -v 'futurex-docker-safe-cleanup' || true
+              echo '*/5 * * * * /usr/local/bin/futurex-docker-safe-cleanup >> /var/log/futurex-docker-cleanup.log 2>&1'
+            ) | sudo crontab -
+
             # Show running containers
             docker compose ps
 
@@ -93,7 +100,7 @@ jobs:
             for i in $(seq 1 30); do
               if curl -fsS http://127.0.0.1:7860/ >/dev/null; then
                 echo "Deployment health check passed."
-                docker image prune -f
+                sudo /usr/local/bin/futurex-docker-safe-cleanup
                 exit 0
               fi
               sleep 2

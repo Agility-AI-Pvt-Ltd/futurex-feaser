@@ -96,6 +96,11 @@ POSTGRES_URL=postgresql://...
 # Redis
 REDIS_ENABLED=false
 REDIS_REQUIRED=false
+REDIS_MAX_CONNECTIONS=20
+REDIS_POOL_TIMEOUT_SECONDS=5
+REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS=3
+REDIS_SOCKET_TIMEOUT_SECONDS=3
+REDIS_HEALTH_CHECK_INTERVAL_SECONDS=30
 
 # LLM
 OPENAI_API_KEY=sk-...
@@ -271,6 +276,8 @@ docker build -t futurex-app .
 docker run -p 7860:7860 futurex-app
 ```
 *(Note: Local Python defaults to `8888`, Docker defaults to `7860`)*
+
+Production deploys install `/usr/local/bin/futurex-docker-safe-cleanup` as a root cron job every 5 minutes. It prunes old Docker build cache, dangling/old unused images, stopped containers, and oversized Docker JSON logs. It does not prune Docker volumes or Qdrant storage.
 
 ### CI/CD
 A GitHub Actions workflow (`.github/workflows/ci-cd.yml`) handles deployments:
