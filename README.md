@@ -7,9 +7,13 @@ sdk: docker
 pinned: false
 ---
 
-when you change .env on AWS than use
+Legacy single-EC2 note: when changing `.env` on an old Docker Compose host, recreate the app container with:
+
+```bash
 docker compose up -d --force-recreate futurex
-so non on cachces wipes out
+```
+
+Current AWS production uses ECR + EC2 Auto Scaling Group. Change runtime env through the launch template or, preferably, AWS Systems Manager Parameter Store / Secrets Manager, then start an ASG instance refresh.
 
 # Futurex Feaser
 
@@ -22,13 +26,173 @@ Both flows are securely isolated into separate PostgreSQL table namespaces, main
 
 ---
 
+## Current AWS DevOps Architecture
+
+The production deployment has moved from a single EC2 Docker Compose host toward a scalable AWS layout. The app is stateless and runs behind an internet-facing Application Load Balancer. Qdrant has been moved out of the app host and now runs on a separate private EC2 instance behind an internal Network Load Balancer.
+
+```text
+Users
+  |
+  v
+Route 53 + ACM HTTPS
+  pending / next step
+  |
+  v
+Public Application Load Balancer
+futurex-public-alb
+DNS: futurex-public-alb-1328654668.ap-south-1.elb.amazonaws.com
+  |
+  v
+Target Group: futurex-app-tg
+HTTP :7860
+Health check: GET /
+Current status: Healthy
+  |
+  v
+EC2 Auto Scaling Group: futurex-app-asg
+Min: 1
+Desired: 1
+Max: 3
+  |
+  v
+FutureX app EC2 instances
+Private subnets only
+Docker image: 429965675866.dkr.ecr.ap-south-1.amazonaws.com/futurex-app:latest
+Container port: 7860
+  |
+  +--> Amazon Aurora PostgreSQL
+  |    Target migration from Neon to AWS Aurora PostgreSQL in the same VPC/region
+  |
+  +--> Redis / ElastiCache Redis
+  |    Target migration for shared cache/rate-limit/session state
+  |
+  +--> Internal Qdrant Network Load Balancer
+       futurex-qdrant-nlb
+       DNS: futurex-qdrant-nlb-cbe793c9289264f0.elb.ap-south-1.amazonaws.com
+       TCP :6333
+       |
+       v
+       Qdrant EC2
+       futurex-qdrant-1
+       Private IP: 10.0.2.93
+       Data stored on EBS
+```
+
+### AWS Network Layout
+
+```text
+VPC: futurex-prod
+VPC ID: vpc-0aa0545a814843f78
+Region: ap-south-1
+
+Public subnets
+  - public-subnet-a: ALB node, NAT Gateway
+  - public-subnet-b: ALB node
+
+Private subnets
+  - private-subnet-a: app ASG instances
+  - private-subnet-b: app ASG instances
+  - private-subnet-c: private services / future capacity
+```
+
+Only the public ALB is internet-facing. FutureX app instances, Qdrant, Aurora PostgreSQL, and Redis should stay in private subnets.
+
+### Security Group Flow
+
+```text
+Internet
+  |
+  | HTTP 80 / HTTPS 443
+  v
+alb-sg
+  |
+  | TCP 7860
+  v
+app-sg
+  |
+  | TCP 6333
+  v
+qdrant-nlb-sg
+  |
+  | TCP 6333
+  v
+qdrant-sg
+  |
+  v
+Qdrant EC2
+```
+
+Current key security group rules:
+
+- `alb-sg`: inbound `80` and future `443` from internet.
+- `app-sg`: inbound `7860` from `alb-sg`.
+- `app-sg`: optional inbound `22` from `BASTION-SG` for private SSH debugging.
+- `qdrant-nlb-sg`: inbound `6333` from `app-sg`.
+- `qdrant-sg`: inbound `6333` from `qdrant-nlb-sg`.
+- `futurex-db-sg` target: inbound `5432` from `app-sg`, and temporary `5432` from `BASTION-SG` during migration only.
+
+### Current Production Backend URL
+
+Until Route 53 and ACM are added, the public backend URL is:
+
+```text
+http://futurex-public-alb-1328654668.ap-south-1.elb.amazonaws.com
+```
+
+API docs:
+
+```text
+http://futurex-public-alb-1328654668.ap-south-1.elb.amazonaws.com/docs
+```
+
+### Deployment Flow
+
+```text
+Developer pushes to GitHub main
+  |
+  v
+GitHub Actions
+  |
+  +-- Build Docker image
+  +-- Validate docker-compose config
+  +-- Run smoke-test container on port 7860
+  +-- Push image to Amazon ECR
+      Tags: latest and commit SHA
+  |
+  v
+EC2 Auto Scaling Group instance refresh
+  |
+  v
+New app EC2 pulls image from ECR
+  |
+  v
+Container starts on port 7860
+  |
+  v
+ALB health check passes
+```
+
+### Production Runtime Principles
+
+- App instances must be stateless.
+- Do not store persistent app data on local EC2 disks.
+- Store metadata and chat state in PostgreSQL.
+- Store cache/rate-limit/session state in Redis.
+- Store vectors only in Qdrant.
+- Store transcript/file uploads in S3 when the upload flow is moved off local disk.
+- Keep Qdrant data on the dedicated Qdrant EC2/EBS volume.
+- Do not run local Qdrant inside each app instance.
+- Do not put secrets directly in launch template user data long term; move them to AWS Systems Manager Parameter Store or AWS Secrets Manager.
+
+---
+
 ## 🚀 Key Features & Runtime Behavior
 
 ### 1. Feasibility Flow
 - **Idea Analysis**: The user submits a startup idea via `POST /api/chat`. The LangGraph AI checks if the idea is actionable or too vague. If actionable, it returns a clarifying question.
 - **Deep Research**: The second `POST /api/chat` call triggers an automated web scraping job to research competitors, market fit, and opportunities. A comprehensive JSON report is generated and persisted.
 - **Scraping Limits**: `AuthorDailyUsage` enforces limits on how many times a user can trigger full web scrapes per day (to control costs).
-- **Interactive QA**: Follow-up questions via `POST /api/qa` are answered by querying the saved feasibility report and searching the cached web research using local Qdrant. 
+- **Interactive QA**: Follow-up questions via `POST /api/qa` are answered by querying the saved feasibility report and searching the cached web research using Qdrant.
 - **Memory Management**: The `AgentStateModel` tracks `qa_history` and maintains an LLM-generated rolling `qa_summary` to prevent context overflow in long Q&A sessions.
 
 ### 2. ClassCatchup AI (Lecture Flow)
@@ -116,22 +280,19 @@ NOISE_REMOVER_MODEL=BAAI/bge-small-en-v1.5
 FASTEMBED_CACHE_DIR=/data/cache/fastembed
 FASTEMBED_FALLBACK_CACHE_DIR=fastembed_cache
 RAG_LOG_CHUNK_CHARS=400
+
 # Production app instances should use the internal Qdrant NLB URL.
 QDRANT_BACKEND=remote
 QDRANT_URL=http://futurex-qdrant-nlb-cbe793c9289264f0.elb.ap-south-1.amazonaws.com:6333
-QDRANT_API_KEY=
-QDRANT_CLOUD_URL=
-QDRANT_CLOUD_API_KEY=
 
-# Local embedded-Qdrant settings. Ignored when QDRANT_BACKEND=remote.
-QDRANT_PATH=/data/qdrant
-QDRANT_FALLBACK_PATH=qdrant_data
+# Optional only when using Qdrant Cloud.
+# QDRANT_API_KEY=
+# QDRANT_CLOUD_URL=
+# QDRANT_CLOUD_API_KEY=
 
 # Lecture Settings
 LECTURE_TRANSCRIPT_STORAGE_PATH=transcripts_data
 LECTURE_QDRANT_COLLECTION_NAME=lecture_transcripts
-# Local embedded lecture-Qdrant setting. Ignored when QDRANT_BACKEND=remote.
-LECTURE_QDRANT_PATH=/data/qdrant
 LECTURE_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 LECTURE_VECTOR_SIZE=384
 
@@ -154,6 +315,13 @@ New Qdrant collections are created with `on_disk=True` in their `VectorParams`. 
 
 When `QDRANT_BACKEND=remote`, the app connects only to `QDRANT_URL` or `QDRANT_CLOUD_URL`. `QDRANT_PATH`, `QDRANT_FALLBACK_PATH`, and `LECTURE_QDRANT_PATH` are used only for embedded/local Qdrant mode.
 
+In production, Qdrant is no longer part of the app Docker Compose stack. App instances connect to:
+
+```env
+QDRANT_BACKEND=remote
+QDRANT_URL=http://futurex-qdrant-nlb-cbe793c9289264f0.elb.ap-south-1.amazonaws.com:6333
+```
+
 Example estimate for 100k vectors with 384 dimensions:
 
 - Raw vectors: `100,000 x 384 x 4 bytes = about 153 MB` before Qdrant storage overhead.
@@ -167,6 +335,8 @@ This setting applies when a collection is created. Existing Qdrant collections m
 ## Qdrant Backups
 
 This repo supports full-node backups for a self-hosted single-node Qdrant service running in Docker Compose.
+
+Production Qdrant is now on a separate private EC2 instance behind the internal Qdrant NLB. Run Qdrant backup/restore automation from the Qdrant host, not from every app instance in the Auto Scaling Group.
 
 - `qdrant` stores the live vector data
 - `qdrant-backup` is a sidecar that runs `cron`
@@ -239,6 +409,91 @@ Redis is **not** used for:
 
 ---
 
+## AWS PostgreSQL and Redis Target State
+
+The next database migration is from Neon PostgreSQL to Amazon Aurora PostgreSQL in the same AWS region and VPC as the app.
+
+Recommended target:
+
+```text
+FutureX app ASG
+  |
+  v
+RDS Proxy
+  |
+  v
+Amazon Aurora PostgreSQL
+VPC: futurex-prod
+Region: ap-south-1
+Private subnets only
+```
+
+Use Aurora PostgreSQL Serverless v2 if the workload is variable and the database should scale capacity automatically. Aurora storage grows automatically; RDS/Aurora compute scaling is not the same as EC2 Auto Scaling. For high connection counts, put RDS Proxy in front of Aurora so app instances do not overwhelm PostgreSQL with direct connections.
+
+Recommended Aurora settings:
+
+- Engine: Amazon Aurora PostgreSQL-Compatible Edition.
+- Capacity: Serverless v2.
+- Initial min ACU: `0.5` or `1`.
+- Initial max ACU: `4`.
+- Public access: `No`.
+- VPC: `futurex-prod`.
+- Security group: `futurex-db-sg`.
+- Inbound: PostgreSQL `5432` from `app-sg`.
+- Temporary migration inbound: PostgreSQL `5432` from `BASTION-SG`.
+
+After Aurora is created, update production app env:
+
+```env
+POSTGRES_URL=postgresql://futurex_admin:PASSWORD@futurex-postgres.cluster-xxxxx.ap-south-1.rds.amazonaws.com:5432/futurex
+```
+
+Migration from Neon:
+
+```bash
+pg_dump "$NEON_POSTGRES_URL" \
+  --format=custom \
+  --no-owner \
+  --no-acl \
+  --file=futurex_neon.dump
+
+pg_restore \
+  --dbname="$AURORA_POSTGRES_URL" \
+  --no-owner \
+  --no-acl \
+  --verbose \
+  futurex_neon.dump
+```
+
+Then verify:
+
+```bash
+psql "$AURORA_POSTGRES_URL" -c "\\dt"
+```
+
+For Redis, the target is AWS ElastiCache Redis in private subnets:
+
+```text
+FutureX app ASG
+  |
+  v
+ElastiCache Redis
+Private subnets
+Security group allows 6379 from app-sg
+```
+
+Production Redis env:
+
+```env
+REDIS_ENABLED=true
+REDIS_REQUIRED=false
+REDIS_URL=redis://futurex-redis.xxxxxx.0001.aps1.cache.amazonaws.com:6379
+REDIS_MAX_CONNECTIONS=50
+REDIS_POOL_TIMEOUT_SECONDS=5
+```
+
+---
+
 ## 💻 Local Development
 
 1. **Create and activate venv:**
@@ -281,6 +536,8 @@ docker build -t futurex-app .
 docker run -p 7860:7860 futurex-app
 ```
 *(Note: Local Python defaults to `8888`, Docker defaults to `7860`)*
+
+Production app instances should run only the FutureX app container. Do not run the `local-qdrant` Docker Compose profile on app ASG instances.
 
 Production deploys install `/usr/local/bin/futurex-docker-safe-cleanup` as a root cron job every 5 minutes. It prunes old Docker build cache, dangling/old unused images, stopped containers, and oversized Docker JSON logs. It does not prune Docker volumes or Qdrant storage.
 
