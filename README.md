@@ -60,11 +60,13 @@ Private subnets only
 Docker image: 429965675866.dkr.ecr.ap-south-1.amazonaws.com/futurex-app:latest
 Container port: 7860
   |
-  +--> Amazon Aurora PostgreSQL
-  |    Target migration from Neon to AWS Aurora PostgreSQL in the same VPC/region
+  +--> Neon PostgreSQL
+  |    Current production database
+  |    Planned migration target: Amazon Aurora PostgreSQL in the same VPC/region
   |
-  +--> Redis / ElastiCache Redis
-  |    Target migration for shared cache/rate-limit/session state
+  +--> Upstash Redis
+  |    Current Redis provider
+  |    Planned migration target: AWS ElastiCache Redis in private subnets
   |
   +--> Internal Qdrant Network Load Balancer
        futurex-qdrant-nlb
@@ -95,7 +97,7 @@ Private subnets
   - private-subnet-c: private services / future capacity
 ```
 
-Only the public ALB is internet-facing. FutureX app instances, Qdrant, Aurora PostgreSQL, and Redis should stay in private subnets.
+Only the public ALB is internet-facing. FutureX app instances and Qdrant should stay in private subnets. Current PostgreSQL is Neon and current Redis is Upstash. When migrated to AWS, Aurora PostgreSQL and ElastiCache Redis should also stay in private subnets.
 
 ### Security Group Flow
 
@@ -176,8 +178,8 @@ ALB health check passes
 
 - App instances must be stateless.
 - Do not store persistent app data on local EC2 disks.
-- Store metadata and chat state in PostgreSQL.
-- Store cache/rate-limit/session state in Redis.
+- Store metadata and chat state in PostgreSQL. Current provider: Neon. Planned AWS target: Aurora PostgreSQL.
+- Store cache/rate-limit/session state in Redis. Current provider: Upstash. Planned AWS target: ElastiCache Redis.
 - Store vectors only in Qdrant.
 - Store transcript/file uploads in S3 when the upload flow is moved off local disk.
 - Keep Qdrant data on the dedicated Qdrant EC2/EBS volume.
@@ -409,9 +411,20 @@ Redis is **not** used for:
 
 ---
 
-## AWS PostgreSQL and Redis Target State
+## Current PostgreSQL and Redis State
 
-The next database migration is from Neon PostgreSQL to Amazon Aurora PostgreSQL in the same AWS region and VPC as the app.
+Current production still uses:
+
+```text
+PostgreSQL: Neon
+Redis: Upstash
+```
+
+These are external managed services and are not yet inside the `futurex-prod` VPC.
+
+## Planned AWS PostgreSQL and Redis Target State
+
+The planned database migration is from Neon PostgreSQL to Amazon Aurora PostgreSQL in the same AWS region and VPC as the app.
 
 Recommended target:
 
@@ -471,7 +484,7 @@ Then verify:
 psql "$AURORA_POSTGRES_URL" -c "\\dt"
 ```
 
-For Redis, the target is AWS ElastiCache Redis in private subnets:
+Current Redis is Upstash. The planned AWS Redis target is AWS ElastiCache Redis in private subnets:
 
 ```text
 FutureX app ASG
