@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     # ── OpenAI ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = Field(default="")
+    LLM_PROVIDER: str = Field(default="openai")
     OPENAI_MODEL_NAME: str = Field(default="gpt-4o-mini")
     OPENROUTER_API_KEY: str = Field(default="")
     OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
