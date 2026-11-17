@@ -9,6 +9,7 @@ langchain-text-splitters
 google-api-python-client
 sqlalchemy
 psycopg2-binary
+psycopg[binary]
 pydantic
 pydantic-settings
 python-dotenv

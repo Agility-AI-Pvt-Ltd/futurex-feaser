@@ -69,27 +69,3 @@ def parse_feasibility_report(raw_text: str) -> dict[str, Any]:
 
 def normalize_feasibility_report_json(raw_text: str) -> str:
     return json.dumps(parse_feasibility_report(raw_text), ensure_ascii=False)
-
-
-def get_feasibility_report_repair_prompt(raw_text: str) -> str:
-    return (
-        "You are fixing malformed JSON from a startup feasibility analysis.\n"
-        "Convert the content below into ONE strict valid JSON object.\n"
-        "Return ONLY JSON with EXACTLY these 8 keys:\n"
-        '{\n'
-        '  "chain_of_thought": ["..."],\n'
-        '  "idea_fit": "",\n'
-        '  "competitors": "",\n'
-        '  "opportunity": "",\n'
-        '  "score": "",\n'
-        '  "score_rationale": "",\n'
-        '  "targeting": "",\n'
-        '  "next_step": ""\n'
-        '}\n'
-        "Rules:\n"
-        "- No markdown fences.\n"
-        "- No explanation before or after the JSON.\n"
-        "- If any field is missing, use an empty string or an empty array.\n"
-        "- Preserve the original meaning as closely as possible.\n\n"
-        f"Original content:\n{raw_text}"
-    )

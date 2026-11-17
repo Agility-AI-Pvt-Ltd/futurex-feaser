@@ -66,6 +66,7 @@ from models import (
 )
 from pipeline.graph import app as langgraph_app
 from pipeline.feasibility_parser import parse_feasibility_report
+from pipeline.output_guardrails import guard_qa_history, guard_stored_analysis
 from pipeline.idea_refinement_graph import (
     get_idea_refinement_graph_mermaid,
     idea_refinement_app,
@@ -1017,6 +1018,7 @@ async def engagement_reply_endpoint(
         first_session.idea or "your startup idea",
         state_model.analysis or "",
         get_llm(temperature=0.4),
+        conversation_id=conv_id,
     )
 
     reply = generate_engagement_reply_from_analysis(
@@ -1025,6 +1027,7 @@ async def engagement_reply_endpoint(
         engagement_question=derived_question,
         founder_answer=founder_answer,
         llm=get_llm(temperature=0.4),
+        conversation_id=conv_id,
     )
     if not reply:
         reply = (
@@ -1173,19 +1176,29 @@ async def get_history_or_conversation_details(identifier: str, db: Session = Dep
         .all()
     )
 
+    # Rows saved before the output guardrails existed can still be malformed;
+    # re-apply the rule-only pass so the UI gets the same shape as a fresh run.
+    analysis = guard_stored_analysis(
+        state_model.analysis,
+        is_first_turn=len(conversation_sessions) <= 1,
+        conversation_id=identifier,
+    )
+    qa_history = guard_qa_history(state_model.qa_history, conversation_id=identifier)
+
     return {
         "conversation_id": identifier,
         "idea": first_session.idea,
         "user_name": first_session.user_name,
         "ideal_customer": first_session.ideal_customer,
         "problem_solved": first_session.what_problem_it_solves,
-        "analysis": state_model.analysis,
+        "analysis": analysis,
         "engagement_question": generate_engagement_question_from_analysis(
             first_session.idea or "",
-            state_model.analysis or "",
+            analysis or "",
             get_llm(temperature=0.4),
+            conversation_id=identifier,
         ),
-        "qa_history": state_model.qa_history or [],
+        "qa_history": qa_history,
         "idea_versions": [_idea_version_payload(version) for version in idea_versions],
         "latest_idea_version": _idea_version_payload(idea_versions[-1]) if idea_versions else None,
         "messages": [

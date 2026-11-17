@@ -21,7 +21,11 @@ from core.json_utils import parse_json_from_text
 from pipeline.state import AgentState
 from pipeline.prompts.qa import get_qa_prompt
 from pipeline.tools import FeasibilityReportSchema
-from pipeline.feasibility_parser import parse_feasibility_report
+from pipeline.output_guardrails import (
+    guard_feasibility_report,
+    guard_markdown_answer,
+    report_issues,
+)
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
 
@@ -295,6 +299,11 @@ def qa_generate_answer_node(state: AgentState, llm) -> dict:
         qa_summary=qa_summary,
     )
     response = llm.invoke(prompt)
+    answer = guard_markdown_answer(
+        _extract_llm_content(response),
+        kind="qa_answer",
+        conversation_id=state.get("conversation_id"),
+    )
 
     trace = _append_trace(
         state,
@@ -302,11 +311,12 @@ def qa_generate_answer_node(state: AgentState, llm) -> dict:
         "Generated final QA response with LLM.",
         {
             "model_response_chars": len(_extract_llm_content(response)),
+            "guarded_response_chars": len(answer),
             "memory_window_turns": len(qa_history),
             "has_summary": bool(qa_summary),
         },
     )
-    return {"qa_answer": _extract_llm_content(response), "trace": trace}
+    return {"qa_answer": answer, "trace": trace}
 
 
 def qa_check_refinement_needed_node(state: AgentState, llm) -> dict:
@@ -369,6 +379,7 @@ def qa_refine_report_node(state: AgentState, llm) -> dict:
     answer = state.get("qa_answer", "")
     original_analysis = state.get("analysis", "")
     idea = state.get("idea", "the startup idea")
+    conversation_id = state.get("conversation_id")
 
     prompt = (
         "You are an elite startup analysis agent. Refine the existing feasibility report of the startup idea based on the new Q&A turn.\n\n"
@@ -393,12 +404,12 @@ def qa_refine_report_node(state: AgentState, llm) -> dict:
             structured_llm = llm.with_structured_output(FeasibilityReportSchema)
             response = structured_llm.invoke(prompt)
             if isinstance(response, FeasibilityReportSchema):
-                refined = response.model_dump_json()
+                refined = guard_feasibility_report(response.model_dump(), llm=llm, conversation_id=conversation_id)
                 logger.info("qa_refine_report.structured_output_success")
                 trace = _append_trace(state, "qa_refine_report", "Successfully refined report structure.", {"refined": True})
                 return {"analysis": refined, "trace": trace}
             elif isinstance(response, dict):
-                refined = json.dumps(response, ensure_ascii=False)
+                refined = guard_feasibility_report(response, llm=llm, conversation_id=conversation_id)
                 logger.info("qa_refine_report.structured_output_dict_success")
                 trace = _append_trace(state, "qa_refine_report", "Successfully refined report (dict).", {"refined": True})
                 return {"analysis": refined, "trace": trace}
@@ -408,7 +419,9 @@ def qa_refine_report_node(state: AgentState, llm) -> dict:
     try:
         response = llm.invoke(prompt)
         content = _extract_llm_content(response)
-        refined = json.dumps(parse_feasibility_report(content), ensure_ascii=False)
+        refined = guard_feasibility_report(content, llm=llm, conversation_id=conversation_id)
+        if report_issues(json.loads(refined)):
+            raise ValueError("refined report is incomplete; keeping the original report")
         trace = _append_trace(state, "qa_refine_report", "Refined report using fallback text generation.", {"refined": True, "fallback": True})
         return {"analysis": refined, "trace": trace}
     except Exception as exc:

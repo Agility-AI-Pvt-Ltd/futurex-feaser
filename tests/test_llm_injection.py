@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from pipeline.qa_graph import (
@@ -157,7 +158,13 @@ class LlmInjectionTests(unittest.TestCase):
             llm,
         )
 
-        self.assertEqual(result["analysis"], '{"score":"7/10"}')
+        report = json.loads(result["analysis"])
+        self.assertEqual(llm.prompts[0].splitlines()[0], "Analyze feasibility of 'smart mirror startup' for 'fashion retailers'.")
+        self.assertEqual(set(report), {
+            "chain_of_thought", "idea_fit", "competitors", "opportunity",
+            "score", "score_rationale", "targeting", "next_step",
+        })
+        self.assertEqual(report["score"], "70/100")
 
     def test_engagement_question_node_uses_injected_llm(self):
         llm = FakeLLM(["What is the fastest way you can validate willingness to pay this month?"])

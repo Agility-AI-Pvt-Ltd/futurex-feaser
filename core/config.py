@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     FASTEMBED_CACHE_DIR: str = Field(default="/data/cache/fastembed")
     FASTEMBED_FALLBACK_CACHE_DIR: str = Field(default="fastembed_cache")
 
+    # ── Idea Lab Output Guardrails ───────────────────────────────────────────
+    # Rule-based format fixes always run; this toggles the LLM repair pass that
+    # runs only when the rules still find problems in a report or question.
+    OUTPUT_GUARDRAIL_LLM_REPAIR_ENABLED: bool = Field(default=True)
+
     # ── CORS ───────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = Field(default="*")
 

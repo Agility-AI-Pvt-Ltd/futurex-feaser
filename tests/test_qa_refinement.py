@@ -85,7 +85,8 @@ class TestQaRefinement(unittest.TestCase):
 
         result = qa_refine_report_node(state, mock_llm)
         refined_report = json.loads(result["analysis"])
-        self.assertEqual(refined_report["score"], "8/10")
+        # Guardrails normalise every score onto the 0-100 scale the UI shows.
+        self.assertEqual(refined_report["score"], "80/100")
         self.assertEqual(refined_report["idea_fit"], "Excellent B2B Fit")
 
     def test_refine_report_fallback_text_success(self):
@@ -116,7 +117,7 @@ class TestQaRefinement(unittest.TestCase):
 
         result = qa_refine_report_node(state, mock_llm)
         refined_report = json.loads(result["analysis"])
-        self.assertEqual(refined_report["score"], "9/10")
+        self.assertEqual(refined_report["score"], "90/100")
         self.assertEqual(refined_report["idea_fit"], "B2B Fallback Fit")
 
 if __name__ == "__main__":

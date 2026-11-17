@@ -15,10 +15,12 @@ from core.config import settings
 from core.json_utils import extract_json_payload as _extract_json_payload
 from core.logging import get_logger
 from core.observability import ls_traceable
-from pipeline.feasibility_parser import (
-    get_feasibility_report_repair_prompt,
-    normalize_feasibility_report_json,
-    parse_feasibility_report,
+from pipeline.feasibility_parser import parse_feasibility_report
+from pipeline.output_guardrails import (
+    guard_clarifying_question,
+    guard_engagement_question,
+    guard_feasibility_report,
+    guard_markdown_answer,
 )
 from pipeline.state import AgentState
 from pipeline.prompts.feasibility import get_feasibility_prompt
@@ -129,7 +131,12 @@ def cross_question_node(state: AgentState, llm) -> dict:
         previous_analysis=state.get('analysis', '')
     )
     response = llm.invoke(prompt)
-    return {"analysis": _extract_llm_content(response)}
+    question = guard_clarifying_question(
+        _extract_llm_content(response),
+        llm=llm,
+        conversation_id=state.get("conversation_id"),
+    )
+    return {"analysis": question}
 
 
 def load_context_node(state: AgentState) -> dict:
@@ -386,45 +393,44 @@ def llm_agent_node(state: AgentState, llm) -> dict:
         search_results=state['search_results']
     )
 
+    candidate: Any = None
     try:
         if hasattr(llm, "with_structured_output"):
             structured_llm = llm.with_structured_output(FeasibilityReportSchema)
             response = structured_llm.invoke(prompt)
             if isinstance(response, FeasibilityReportSchema):
                 logger.info("feasibility.analysis.structured_output_success")
-                return {"analysis": response.model_dump_json()}
+                candidate = response.model_dump()
             elif isinstance(response, dict):
                 logger.info("feasibility.analysis.structured_output_dict_success")
-                return {"analysis": json.dumps(response, ensure_ascii=False)}
+                candidate = response
     except Exception as exc:
         logger.warning(
             "feasibility.analysis.structured_output_failed error=%s. Falling back to raw text completion.",
             exc,
         )
 
-    response = llm.invoke(prompt)
-    raw_analysis = _extract_llm_content(response)
+    if candidate is None:
+        candidate = _extract_llm_content(llm.invoke(prompt))
 
-    try:
-        return {"analysis": normalize_feasibility_report_json(raw_analysis)}
-    except Exception as exc:
-        logger.warning("feasibility.analysis.parse_failed.initial error=%s", exc)
-
-    try:
-        repair_prompt = get_feasibility_report_repair_prompt(raw_analysis)
-        repaired_response = llm.invoke(repair_prompt)
-        repaired_analysis = _extract_llm_content(repaired_response)
-        normalized = normalize_feasibility_report_json(repaired_analysis)
-        logger.info("feasibility.analysis.repaired_json")
-        return {"analysis": normalized}
-    except Exception as exc:
-        logger.warning("feasibility.analysis.parse_failed.repair error=%s", exc)
-
-    return {"analysis": raw_analysis}
+    # Structured output still drifts (tables, "75" vs "75/100", empty sections),
+    # so every path goes through the same format guardrail before the UI sees it.
+    return {
+        "analysis": guard_feasibility_report(
+            candidate,
+            llm=llm,
+            conversation_id=state.get("conversation_id"),
+        )
+    }
 
 
 @ls_traceable(run_type="chain", name="generate_engagement_question", tags=["engagement"])
-def generate_engagement_question_from_analysis(idea: str, raw_analysis: str, llm) -> str:
+def generate_engagement_question_from_analysis(
+    idea: str,
+    raw_analysis: str,
+    llm,
+    conversation_id: str | None = None,
+) -> str:
     cleaned_analysis = (raw_analysis or "").strip()
     if not cleaned_analysis:
         return ""
@@ -457,7 +463,11 @@ def generate_engagement_question_from_analysis(idea: str, raw_analysis: str, llm
     )
 
     try:
-        return _extract_llm_content(llm.invoke(prompt)).strip()
+        return guard_engagement_question(
+            _extract_llm_content(llm.invoke(prompt)),
+            llm=llm,
+            conversation_id=conversation_id,
+        )
     except Exception:
         return ""
 
@@ -469,6 +479,7 @@ def generate_engagement_reply_from_analysis(
     engagement_question: str,
     founder_answer: str,
     llm,
+    conversation_id: str | None = None,
 ) -> str:
     cleaned_analysis = (raw_analysis or "").strip()
     founder_answer = (founder_answer or "").strip()
@@ -502,7 +513,11 @@ def generate_engagement_reply_from_analysis(
     )
 
     try:
-        return _extract_llm_content(llm.invoke(prompt)).strip()
+        return guard_markdown_answer(
+            _extract_llm_content(llm.invoke(prompt)),
+            kind="engagement_reply",
+            conversation_id=conversation_id,
+        )
     except Exception:
         return ""
 
@@ -518,5 +533,6 @@ def engagement_question_node(state: AgentState, llm) -> dict:
         state.get("idea", ""),
         state.get("analysis", "") or "",
         llm,
+        conversation_id=state.get("conversation_id"),
     )
     return {"engagement_question": question}
