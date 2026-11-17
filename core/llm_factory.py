@@ -5,7 +5,7 @@ def get_llm(model: str | None = None, temperature: float = 0.7) -> ChatOpenAI:
     """
     Factory function to initialize and return the language model.
     """
-    provider = settings.LLM_PROVIDER.strip().lower()
+    provider = settings.LLM_PROVIDER.split("#", 1)[0].strip().lower()
 
     if provider == "openrouter":
         return ChatOpenAI(
