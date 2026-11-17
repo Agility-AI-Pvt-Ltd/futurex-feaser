@@ -12,6 +12,10 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
+# Playwright's bundled Node needs libatomic, which the slim base image no longer ships.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 RUN playwright install --with-deps chromium
 
 COPY . .
