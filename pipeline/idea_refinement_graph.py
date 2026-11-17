@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 from core.json_utils import parse_json_from_text
 from core.llm_factory import get_llm
 from core.observability import ls_traceable
+from pipeline.output_guardrails import normalize_score, to_plain_text
 from pipeline.state import AgentState
 
 
@@ -274,15 +275,16 @@ def idea_refinement_apply_node(state: AgentState, llm) -> dict:
     if score_number is not None:
         score_after = f"{score_number + score_delta}/100"
     else:
-        score_after = str(parsed.get("score_after") or "")
+        score_after = normalize_score(parsed.get("score_after"))[0]
 
+    # The UI shows these fields as plain text, so strip any markdown the LLM adds.
     result = {
-        "refined_idea": str(parsed.get("startup_idea") or state.get("idea", "")),
-        "refined_problem_solved": str(parsed.get("problem_solved") or state.get("problem_solved", "")),
-        "refined_ideal_customer": str(parsed.get("ideal_customer") or state.get("ideal_customer", "")),
+        "refined_idea": to_plain_text(parsed.get("startup_idea")) or state.get("idea", ""),
+        "refined_problem_solved": to_plain_text(parsed.get("problem_solved")) or state.get("problem_solved", ""),
+        "refined_ideal_customer": to_plain_text(parsed.get("ideal_customer")) or state.get("ideal_customer", ""),
         "refinement_score_delta": score_delta,
         "refinement_score_after": score_after,
-        "refinement_summary": str(parsed.get("rationale") or "Created a new idea refinement version."),
+        "refinement_summary": to_plain_text(parsed.get("rationale")) or "Created a new idea refinement version.",
     }
     trace = _append_trace(
         state,
